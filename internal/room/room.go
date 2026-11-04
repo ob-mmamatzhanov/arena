@@ -255,6 +255,10 @@ func (r *Room) broadcast(s game.Snapshot) {
 		Players: make([]anet.PlayerState, len(s.Players)),
 		Bullets: make([]anet.BulletState, len(s.Bullets)),
 		Hits:    make([]anet.Hit, len(s.Hits)),
+		Pickups: make([]anet.Pickup, len(s.Pickups)),
+	}
+	for i, pk := range s.Pickups {
+		msg.Pickups[i] = anet.Pickup{ID: uint32(pk.ID), Type: string(pk.Type), X: pk.Pos.X, Y: pk.Pos.Y}
 	}
 	for i, b := range s.Bullets {
 		msg.Bullets[i] = anet.BulletState{
@@ -284,6 +288,7 @@ func (r *Room) broadcast(s game.Snapshot) {
 			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
+			Boosted: p.Boosted,
 			LastSeq: p.LastSeq,
 		}
 	}

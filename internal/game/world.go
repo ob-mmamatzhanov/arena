@@ -41,6 +41,8 @@ type Player struct {
 	HP       int
 	Score    int
 	LastSeq  uint32 // seq последнего применённого ввода — для client-side reconciliation
+
+	speedLeft float64 // секунд ускорения от пикапа speed
 }
 
 // PlayerState — неизменяемая копия состояния игрока для снапшота.
@@ -51,6 +53,7 @@ type PlayerState struct {
 	Heat    float64
 	HP      int
 	Score   int
+	Boosted bool // действует ускорение от пикапа
 	LastSeq uint32
 }
 
@@ -114,6 +117,7 @@ type Snapshot struct {
 	Players []PlayerState
 	Bullets []BulletState
 	Hits    []Hit
+	Pickups []Pickup // по возрастанию ID
 	Round   RoundState
 }
 
@@ -147,6 +151,15 @@ type Config struct {
 	KillLimit        int     // счёт, при достижении которого раунд заканчивается
 	IntermissionTime float64 // пауза между раундами, секунды
 
+	// Пикапы. PickupInterval ≤ 0 отключает их появление.
+	PickupInterval      float64 // секунд между появлениями
+	MaxPickups          int     // одновременно на карте
+	PickupRadius        float64
+	PickupMinPlayerDist float64 // минимальное расстояние от центра игрока при спавне
+	HealthAmount        int     // hp от пикапа health
+	SpeedMultiplier     float64 // множитель скорости от пикапа speed
+	SpeedDuration       float64 // секунды
+
 	// Seed инициализирует генератор мира (точки респавна). Одинаковый seed
 	// и одинаковые вводы дают одинаковую симуляцию.
 	Seed uint64
@@ -179,6 +192,8 @@ func DefaultConfig() Config {
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
 		Obstacles: DefaultObstacles(),
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
+		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
+		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
 	}
 }
 
@@ -200,17 +215,22 @@ type World struct {
 	phase    Phase
 	timeLeft float64  // до конца текущей фазы
 	winner   PlayerID // победитель завершённого раунда (в intermission)
+
+	pickups     []Pickup
+	nextPickup  PickupID
+	pickupTimer float64 // секунд до следующего появления пикапа
 }
 
 // NewWorld создаёт пустой мир; первый раунд начинается сразу. Случайность
 // берётся только из генератора, засеянного cfg.Seed, поэтому симуляция воспроизводима.
 func NewWorld(cfg Config) *World {
 	return &World{
-		cfg:      cfg,
-		players:  make(map[PlayerID]*Player),
-		rng:      rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
-		phase:    PhasePlay,
-		timeLeft: max(cfg.RoundTime, 0),
+		cfg:         cfg,
+		players:     make(map[PlayerID]*Player),
+		rng:         rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
+		phase:       PhasePlay,
+		timeLeft:    max(cfg.RoundTime, 0),
+		pickupTimer: cfg.PickupInterval,
 	}
 }
 
@@ -279,14 +299,13 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	}
 
 	for _, p := range w.players {
-		p.Pos = w.move(p.Pos, Vec2{
-			X: p.Move.X * w.cfg.PlayerSpeed * dt,
-			Y: p.Move.Y * w.cfg.PlayerSpeed * dt,
-		})
+		speed := w.cfg.PlayerSpeed * w.speedFactor(p)
+		p.Pos = w.move(p.Pos, Vec2{X: p.Move.X * speed * dt, Y: p.Move.Y * speed * dt})
 	}
 
 	// Порядок по ID — чтобы результат не зависел от порядка обхода map.
 	ids := w.sortedIDs()
+	w.updatePickups(dt, ids)
 	w.updateBullets(dt, ids)
 	w.fire(dt, ids)
 	w.advanceRound(dt, ids)
@@ -343,7 +362,7 @@ func (w *World) endRound(ids []PlayerID) {
 }
 
 // startRound начинает новый раунд: у всех полное HP и нулевой счёт, все
-// респавнятся в случайных свободных точках, пули и вооружение сбрасываются.
+// респавнятся в случайных свободных точках, пули, пикапы и вооружение сбрасываются.
 func (w *World) startRound() {
 	w.phase = PhasePlay
 	w.timeLeft = max(w.cfg.RoundTime, 0)
@@ -351,6 +370,7 @@ func (w *World) startRound() {
 	clear(w.bullets)
 	w.bullets = w.bullets[:0]
 	w.hits = w.hits[:0]
+	w.resetPickups()
 	for _, id := range w.sortedIDs() { // порядок по ID — детерминированный rng
 		p := w.players[id]
 		p.HP = StartHP
@@ -360,6 +380,7 @@ func (w *World) startRound() {
 		p.Fire = false
 		p.cooldown = 0
 		p.Heat = 0
+		p.speedLeft = 0
 	}
 }
 
@@ -425,7 +446,12 @@ func sweepAxis(from, to, other, lo, hi, oLo, oHi, r float64) float64 {
 // Касание допустимо; допуск contactEps гасит ошибку округления в точке касания,
 // которую выставляет sweepAxis (иначе d² может оказаться на ulp меньше r²).
 func (w *World) isFree(p Vec2) bool {
-	r := w.cfg.PlayerRadius - contactEps
+	return w.circleFree(p, w.cfg.PlayerRadius)
+}
+
+// circleFree — то же для круга произвольного радиуса (например, пикапа).
+func (w *World) circleFree(p Vec2, radius float64) bool {
+	r := radius - contactEps
 	for _, o := range w.cfg.Obstacles {
 		dx := p.X - clamp(p.X, o.X, o.X+o.W)
 		dy := p.Y - clamp(p.Y, o.Y, o.Y+o.H)
@@ -624,6 +650,7 @@ func (w *World) Snapshot() Snapshot {
 			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
+			Boosted: p.speedLeft > timeEps,
 			LastSeq: p.LastSeq,
 		})
 	}
@@ -648,7 +675,14 @@ func (w *World) Snapshot() Snapshot {
 			round.Scores[i] = ScoreEntry{ID: p.ID, Score: p.Score}
 		}
 	}
-	return Snapshot{Tick: w.tick, Players: ps, Bullets: bs, Hits: slices.Clone(w.hits), Round: round}
+	return Snapshot{
+		Tick:    w.tick,
+		Players: ps,
+		Bullets: bs,
+		Hits:    slices.Clone(w.hits),
+		Pickups: slices.Clone(w.pickups), // ID растут при добавлении, порядок сохраняется
+		Round:   round,
+	}
 }
 
 // spawnPoint раскладывает игроков по окружности вокруг центра арены.

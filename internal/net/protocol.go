@@ -60,6 +60,7 @@ type PlayerState struct {
 	Heat    float64 `json:"heat"` // перегрев [0, 1]: разброс ±heat×0.25 рад, для прицела
 	HP      int     `json:"hp"`
 	Score   int     `json:"score"`
+	Boosted bool    `json:"boosted"` // действует ускорение от пикапа speed
 	LastSeq uint32  `json:"lastSeq"`
 }
 
@@ -117,5 +118,20 @@ type Snapshot struct {
 	Players []PlayerState `json:"players"`
 	Bullets []BulletState `json:"bullets"`
 	Hits    []Hit         `json:"hits"`
+	Pickups []Pickup      `json:"pickups"` // всегда массив (не null)
 	Round   Round         `json:"round"`
+}
+
+// Типы пикапов (поле pickup.type).
+const (
+	PickupHealth = "health"
+	PickupSpeed  = "speed"
+)
+
+// Pickup — пикап на карте.
+type Pickup struct {
+	ID   uint32  `json:"id"`
+	Type string  `json:"type"`
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
 }

@@ -13,6 +13,9 @@ func testConfig() Config {
 		Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10, HitRadius: 12,
 		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
+		// Спавн пикапов выключен (PickupInterval = 0), параметры — для тестов подбора.
+		MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
+		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
 		Seed: 1,
 	}
 }

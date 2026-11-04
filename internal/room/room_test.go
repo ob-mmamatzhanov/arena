@@ -415,3 +415,42 @@ func TestSnapshotRoundJSONShape(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotPickupsAndBoostedJSON(t *testing.T) {
+	rm := New("test", slog.New(slog.DiscardHandler))
+	c := newFakeClient(2)
+	rm.clients[1] = c
+
+	rm.broadcast(game.Snapshot{
+		Players: []game.PlayerState{{ID: 1, HP: 100, Boosted: true}},
+		Pickups: []game.Pickup{{ID: 7, Type: game.PickupSpeed, Pos: game.Vec2{X: 10, Y: 20}}},
+	})
+	var got struct {
+		Players []map[string]any `json:"players"`
+		Pickups json.RawMessage  `json:"pickups"`
+	}
+	if err := json.Unmarshal(<-c.msgs, &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"id":7,"type":"speed","x":10,"y":20}]`; string(got.Pickups) != want {
+		t.Fatalf("pickups = %s, want %s", got.Pickups, want)
+	}
+	if b, ok := got.Players[0]["boosted"]; !ok || b != true {
+		t.Fatalf("player boosted = %v (present=%v), want true", b, ok)
+	}
+	if _, ok := got.Players[0]["speedUntil"]; ok {
+		t.Fatal("speedUntil must not be sent")
+	}
+
+	// Без пикапов — пустой массив, не null.
+	rm.broadcast(game.Snapshot{})
+	var empty struct {
+		Pickups json.RawMessage `json:"pickups"`
+	}
+	if err := json.Unmarshal(<-c.msgs, &empty); err != nil {
+		t.Fatal(err)
+	}
+	if string(empty.Pickups) != "[]" {
+		t.Fatalf("empty pickups = %s, want []", empty.Pickups)
+	}
+}
