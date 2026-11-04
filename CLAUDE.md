@@ -1,51 +1,53 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Этот файл содержит указания для Claude Code (claude.ai/code) при работе с кодом в этом репозитории.
 
-## Commands
+## Команды
 
 ```sh
-go build ./... && go vet ./... && go test ./...      # the standard check before every commit
-go test -race ./...                                    # room/net are concurrent — run before pushing
-go test ./internal/game -run TestDashImpulse -v        # single test
+go build ./... && go vet ./... && go test ./...      # стандартная проверка перед каждым коммитом
+go test -race ./...                                    # room/net конкурентны — прогнать перед push
+go test ./internal/game -run TestDashImpulse -v        # отдельный тест
 go test ./internal/game -run '^$' -bench BenchmarkUpdate8Players100Bullets -benchmem
-go run ./cmd/server -addr :8080 -origins localhost:5173   # WS at GET /ws, health at GET /healthz
+go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, health на GET /healthz
 ```
 
-**gofmt on Windows:** `core.autocrlf=true`, so working-copy files have CRLF and `gofmt -l` flags every file. Check formatting ignoring `\r`:
+**gofmt на Windows:** включён `core.autocrlf=true`, поэтому в рабочей копии файлы с CRLF и `gofmt -l` помечает вообще все файлы. Проверять форматирование, игнорируя `\r`:
 `for f in $(git ls-files -m -o --exclude-standard '*.go'); do tr -d '\r' < $f | gofmt -d; done`
 
-`python` on this machine is the Microsoft Store stub — don't use it for scripted edits.
+**`-race` на Windows** требует cgo и C-компилятора, иначе сборка падает на `# runtime/cgo: C compiler "gcc" not found`. Поставлен WinLibs MinGW-w64 (`winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT`), в `go env` выставлено `CGO_ENABLED=1`. После установки GoLand нужно перезапустить, чтобы он подхватил новый PATH.
 
-## Architecture
+`python` на этой машине — заглушка из Microsoft Store, не использовать её для скриптовых правок.
 
-Authoritative real-time arena server (Go, `nhooyr.io/websocket`), 20 Hz ticks, one room `lobby` of up to 8 players.
+## Архитектура
 
-Three layers with a strict dependency direction `room → game`, `room → net`; **`game` and `net` don't know about each other**:
+Авторитетный сервер real-time арены (Go, `nhooyr.io/websocket`), тики 20 Гц, одна комната `lobby` до 8 игроков.
 
-- **`internal/game`** — pure simulation, no I/O, no goroutines, not thread-safe. `World.Update(dt, inputs)` advances one tick; `World.Snapshot()` is a pure read returning copies. All tunables live in `Config` (`DefaultConfig()` is production). Mechanics are split by file: `world.go` (movement, obstacles, bullets, rounds, heat), `pickups.go`, `dash.go`, `events.go`.
-- **`internal/net`** — wire protocol (`protocol.go`: JSON types `Input`, `Welcome`, `Snapshot`, `Event` …) and `Conn`, a WebSocket wrapper where only `WritePump` writes to the socket and everyone else enqueues via non-blocking `TrySend`.
-- **`internal/room`** — the only place both meet. A `Room` is **a single goroutine** (`Run`) that owns the world, the clients and the input buffers; the outside talks to it only through the `join`/`leave`/`inputs` channels, so there are no mutexes. The world is mutated only in `tick()`. `broadcast` converts `game.Snapshot` → `net.Snapshot`, marshals once, and drops clients whose send queue is full.
+Три слоя со строгим направлением зависимостей `room → game`, `room → net`; **`game` и `net` ничего не знают друг о друге**:
 
-Per connection (`room/handler.go`): accept → `Room.Join` (Welcome is queued before Join returns) → `WritePump` goroutine + blocking `ReadPump` → `Leave`. Joins/leaves are applied at the next tick.
+- **`internal/game`** — чистая симуляция, без I/O, без горутин, не потокобезопасна. `World.Update(dt, inputs)` продвигает один тик; `World.Snapshot()` — чистое чтение, возвращающее копии. Все настройки живут в `Config` (`DefaultConfig()` — продакшен). Механики разнесены по файлам: `world.go` (движение, препятствия, пули, раунды, перегрев), `pickups.go`, `dash.go`, `events.go`.
+- **`internal/net`** — протокол обмена (`protocol.go`: JSON-типы `Input`, `Welcome`, `Snapshot`, `Event` …) и `Conn`, обёртка над WebSocket, где в сокет пишет только `WritePump`, а все остальные кладут в очередь через неблокирующий `TrySend`.
+- **`internal/room`** — единственное место, где оба слоя встречаются. `Room` — это **одна горутина** (`Run`), владеющая миром, клиентами и буферами ввода; снаружи с ней общаются только через каналы `join`/`leave`/`inputs`, поэтому мьютексов нет. Мир мутируется только в `tick()`. `broadcast` конвертирует `game.Snapshot` → `net.Snapshot`, маршалит один раз и выбрасывает клиентов, у которых очередь отправки переполнена.
 
-### Adding a field to the protocol
+На каждое соединение (`room/handler.go`): accept → `Room.Join` (Welcome кладётся в очередь до возврата из Join) → горутина `WritePump` + блокирующий `ReadPump` → `Leave`. Подключения и отключения применяются на следующем тике.
 
-A new piece of state usually touches four places: the `game` type (`Player`/`PlayerState`/`Snapshot`), its `net` counterpart with a JSON tag, the mapping in `room.broadcast` (or `handleJoin` for `Welcome`, `bufferInput` for `Input`), and a JSON-shape test in `room_test.go` / `net/protocol_test.go`. Static data (map obstacles, world size, speed/radius) goes in `Welcome` once, not in snapshots.
+### Добавление поля в протокол
 
-## Invariants the code relies on
+Новая часть состояния обычно затрагивает четыре места: тип в `game` (`Player`/`PlayerState`/`Snapshot`), его аналог в `net` с JSON-тегом, маппинг в `room.broadcast` (либо `handleJoin` для `Welcome`, `bufferInput` для `Input`) и тест на форму JSON в `room_test.go` / `net/protocol_test.go`. Статические данные (препятствия карты, размер мира, скорость/радиус) уходят в `Welcome` один раз, а не в снапшоты.
 
-- **Determinism.** All randomness comes from `World.rng` (seeded by `Config.Seed`; the room seeds from time) — never the global `rand`. Anything that consumes rng or emits events iterates players in `sortedIDs()` order, not map order. Tests depend on this.
-- **Zero allocations in `Update`** (the benchmark reports `0 allocs/op`): slices (`bullets`, `pickups`, `events`, `ids`) are reused with `s[:0]` and filtered in place. Hot paths avoid `math.Hypot`/`math.Min`/`math.Max` (not inlined on amd64) — compare squared distances and use the local `clamp`.
-- **Config value ≤ 0 disables a mechanic** (`RoundTime`, `KillLimit`, `PickupInterval`, `DashDuration`). `testConfig()` in `world_test.go` keeps rounds and pickup spawning off so unrelated tests aren't affected — enable them per test.
-- **Float timers** compare against `timeEps`, contact distances against `contactEps`; exact `==` on accumulated `dt` breaks.
-- **Events** (`Snapshot.Events`) are reset at the start of each `Update`, so each event appears in exactly one tick's snapshot. `net.Event.MarshalJSON` writes only the fields of its type (no `omitempty` on numbers: 0 is a valid coordinate/ID).
-- **Intermission freezes the world**: inputs are dropped entirely (`LastSeq` doesn't advance); only the phase timer runs. `startRound` resets per-round player state — new per-player state must be reset there too.
-- **Input merging**: the room keeps the newest input per player per tick by `seq`, but ORs one-shot/edge flags (`Fire`, `Dash`) across inputs of the same tick so short presses aren't lost.
-- Player body radius (`PlayerRadius`, used for walls/borders and sent in Welcome for client prediction) and hitbox (`HitRadius`) are separate config values.
+## Инварианты, на которые опирается код
 
-## Conventions
+- **Детерминизм.** Вся случайность берётся из `World.rng` (сид из `Config.Seed`; комната сидит от времени) — никогда из глобального `rand`. Всё, что потребляет rng или порождает события, обходит игроков в порядке `sortedIDs()`, а не в порядке map. Тесты на это завязаны.
+- **Ноль аллокаций в `Update`** (бенчмарк показывает `0 allocs/op`): слайсы (`bullets`, `pickups`, `events`, `ids`) переиспользуются через `s[:0]` и фильтруются на месте. Горячие пути избегают `math.Hypot`/`math.Min`/`math.Max` (не инлайнятся на amd64) — сравниваются квадраты расстояний и используется локальный `clamp`.
+- **Значение конфига ≤ 0 выключает механику** (`RoundTime`, `KillLimit`, `PickupInterval`, `DashDuration`). `testConfig()` в `world_test.go` держит раунды и спавн пикапов выключенными, чтобы не задевать несвязанные тесты — включать их нужно отдельно в каждом тесте.
+- **Вещественные таймеры** сравниваются с `timeEps`, контактные расстояния — с `contactEps`; точное `==` на накопленном `dt` ломается.
+- **События** (`Snapshot.Events`) сбрасываются в начале каждого `Update`, поэтому каждое событие попадает ровно в один снапшот тика. `net.Event.MarshalJSON` пишет только поля своего типа (без `omitempty` на числах: 0 — валидная координата/ID).
+- **Перерыв между раундами замораживает мир**: ввод отбрасывается целиком (`LastSeq` не растёт); работает только таймер фазы. `startRound` сбрасывает пораундовое состояние игроков — новое состояние игрока нужно сбрасывать там же.
+- **Слияние ввода**: комната оставляет самый свежий ввод игрока за тик по `seq`, но ORит одноразовые/фронтовые флаги (`Fire`, `Dash`) по всем вводам одного тика, чтобы короткие нажатия не терялись.
+- Радиус тела игрока (`PlayerRadius`, используется для стен/границ и отправляется в Welcome для клиентского предсказания) и хитбокс (`HitRadius`) — разные значения конфига.
 
-- Code comments, test messages and commit message bodies are in Russian; commit subjects are in English.
-- Each mechanic goes in its own commit with its tests; every commit should pass build/vet/test on its own.
-- Ticks in tests: `dt = 0.05`; helpers `place`, `tickN`, `fireOnce`, `runCollectHits`, `hitsOf`, `dropPickup` live in the `_test.go` files of `internal/game`.
+## Соглашения
+
+- Комментарии в коде, сообщения тестов и тела коммит-сообщений — на русском; заголовки коммитов — на английском.
+- Каждая механика идёт отдельным коммитом вместе со своими тестами; каждый коммит должен сам по себе проходить build/vet/test.
+- Тики в тестах: `dt = 0.05`; хелперы `place`, `tickN`, `fireOnce`, `runCollectHits`, `hitsOf`, `dropPickup` лежат в `_test.go` файлах `internal/game`.
