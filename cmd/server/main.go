@@ -19,7 +19,6 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "адрес HTTP-сервера")
 	origins := flag.String("origins", "", "разрешённые Origin через запятую (например, localhost:5173)")
-	static := flag.String("static", "", "каталог со статикой клиента, раздаётся на / (пусто — не раздавать)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -46,11 +45,6 @@ func main() {
 		}
 	})
 	mux.Handle("GET /ws", room.Handler(lobby, anet.AcceptOptions{OriginPatterns: originPatterns}, log))
-	if *static != "" {
-		// "GET /" — наименее специфичный шаблон, /ws и /healthz имеют приоритет.
-		mux.Handle("GET /", http.FileServer(http.Dir(*static)))
-		log.Info("serving static", "dir", *static)
-	}
 
 	srv := &http.Server{
 		Addr:              *addr,

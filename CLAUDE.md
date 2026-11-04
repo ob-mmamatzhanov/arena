@@ -9,7 +9,7 @@ go build ./... && go vet ./... && go test ./...      # стандартная п
 go test -race ./...                                    # room/net конкурентны — прогнать перед push
 go test ./internal/game -run TestDashImpulse -v        # отдельный тест
 go test ./internal/game -run '^$' -bench BenchmarkUpdate8Players100Bullets -benchmem
-go run ./cmd/server -addr :8080 -origins localhost:5173 -static ../arena-client   # WS на GET /ws, health на GET /healthz, клиент на GET /
+go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, health на GET /healthz
 ```
 
 **gofmt на Windows:** включён `core.autocrlf=true`, поэтому в рабочей копии файлы с CRLF и `gofmt -l` помечает вообще все файлы. Проверять форматирование, игнорируя `\r`:
