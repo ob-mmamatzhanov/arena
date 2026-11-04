@@ -281,6 +281,7 @@ func (r *Room) broadcast(s game.Snapshot) {
 			X:       p.Pos.X,
 			Y:       p.Pos.Y,
 			Angle:   p.Angle,
+			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
 			LastSeq: p.LastSeq,

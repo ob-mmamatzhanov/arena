@@ -57,6 +57,7 @@ type PlayerState struct {
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
 	Angle   float64 `json:"angle"`
+	Heat    float64 `json:"heat"` // перегрев [0, 1]: разброс ±heat×0.25 рад, для прицела
 	HP      int     `json:"hp"`
 	Score   int     `json:"score"`
 	LastSeq uint32  `json:"lastSeq"`

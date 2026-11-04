@@ -37,6 +37,7 @@ type Player struct {
 	Angle    float64 // направление взгляда из последнего принятого ввода
 	Fire     bool    // огонь зажат (из последнего принятого ввода)
 	cooldown float64 // секунд до следующего возможного выстрела
+	Heat     float64 // перегрев ствола [0, 1]: определяет разброс выстрелов
 	HP       int
 	Score    int
 	LastSeq  uint32 // seq последнего применённого ввода — для client-side reconciliation
@@ -47,6 +48,7 @@ type PlayerState struct {
 	ID      PlayerID
 	Pos     Vec2
 	Angle   float64
+	Heat    float64
 	HP      int
 	Score   int
 	LastSeq uint32
@@ -128,6 +130,13 @@ type Config struct {
 	FireCooldown   float64 // минимальный интервал между выстрелами, секунды
 	BulletDamage   int
 
+	// Отдача: каждый выстрел добавляет HeatPerShot (heat ≤ 1), каждую секунду
+	// без выстрела снимается HeatDecay. Отклонение пули от Angle — равномерно
+	// в ±heat×MaxSpread радиан.
+	HeatPerShot float64
+	HeatDecay   float64 // в секунду
+	MaxSpread   float64 // радианы при heat = 1
+
 	// Obstacles — статические препятствия карты, непроходимые для игроков и пуль.
 	// Срез не меняется после создания мира.
 	Obstacles []Obstacle
@@ -167,6 +176,7 @@ func DefaultConfig() Config {
 	return Config{
 		Width: 1000, Height: 1000, PlayerSpeed: 200, PlayerRadius: 12, HitRadius: 12,
 		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
+		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
 		Obstacles: DefaultObstacles(),
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 	}
@@ -349,6 +359,7 @@ func (w *World) startRound() {
 		p.Move = Vec2{}
 		p.Fire = false
 		p.cooldown = 0
+		p.Heat = 0
 	}
 }
 
@@ -564,14 +575,21 @@ func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
 
 // fire создаёт пули для игроков с зажатым огнём и истёкшим кулдауном.
 // Пуля вылетает из позиции игрока; по владельцу она не попадает (см. firstHit).
+//
+// Разброс берётся от heat до выстрела: первый выстрел с холодного ствола точен.
+// В тиках без выстрела (огонь отпущен или кулдаун) heat остывает.
+// Игроки обходятся по ID, поэтому последовательность rng детерминирована.
 func (w *World) fire(dt float64, ids []PlayerID) {
 	for _, id := range ids {
 		p := w.players[id]
 		p.cooldown = math.Max(0, p.cooldown-dt)
 		if !p.Fire || p.cooldown > timeEps {
+			p.Heat = max(p.Heat-w.cfg.HeatDecay*dt, 0)
 			continue
 		}
-		dir := Vec2{X: math.Cos(p.Angle), Y: math.Sin(p.Angle)}
+		angle := p.Angle + w.spread(p.Heat)
+		p.Heat = min(p.Heat+w.cfg.HeatPerShot, 1)
+		dir := Vec2{X: math.Cos(angle), Y: math.Sin(angle)}
 		w.nextBullet++
 		w.bullets = append(w.bullets, Bullet{
 			ID:    w.nextBullet,
@@ -584,6 +602,17 @@ func (w *World) fire(dt float64, ids []PlayerID) {
 	}
 }
 
+// spread — случайное отклонение угла в ±heat×MaxSpread из генератора мира.
+// При нулевом разбросе генератор не трогается: точный выстрел не сдвигает
+// последовательность rng.
+func (w *World) spread(heat float64) float64 {
+	limit := heat * w.cfg.MaxSpread
+	if limit <= 0 {
+		return 0
+	}
+	return (2*w.rng.Float64() - 1) * limit
+}
+
 // Snapshot возвращает копию состояния, отсортированную по ID (детерминированно).
 func (w *World) Snapshot() Snapshot {
 	ps := make([]PlayerState, 0, len(w.players))
@@ -592,6 +621,7 @@ func (w *World) Snapshot() Snapshot {
 			ID:      p.ID,
 			Pos:     p.Pos,
 			Angle:   p.Angle,
+			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
 			LastSeq: p.LastSeq,
