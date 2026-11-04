@@ -9,3 +9,4 @@ FROM gcr.io/distroless/static-debian12
 COPY --from=build /arena /arena
 EXPOSE 8080
 ENTRYPOINT ["/arena"]
+CMD ["-addr", ":8080", "-origins", "localhost:*,127.0.0.1:*"]
