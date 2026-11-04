@@ -160,6 +160,9 @@ func TestJoinSendsWelcomeAndAddsPlayerOnTick(t *testing.T) {
 	if cfg := rm.world.Config(); w.Width != cfg.Width || w.Height != cfg.Height {
 		t.Fatalf("welcome size = %vx%v, want world size %vx%v", w.Width, w.Height, cfg.Width, cfg.Height)
 	}
+	if cfg := rm.world.Config(); w.PlayerSpeed != cfg.PlayerSpeed || w.PlayerRadius != cfg.PlayerRadius {
+		t.Fatalf("welcome speed/radius = %v/%v, want %v/%v", w.PlayerSpeed, w.PlayerRadius, cfg.PlayerSpeed, cfg.PlayerRadius)
+	}
 	c.snapshotUntil(t, func(s anet.Snapshot) bool {
 		p, ok := findPlayer(s, id)
 		return ok && p.HP == game.StartHP

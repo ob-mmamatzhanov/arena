@@ -33,6 +33,10 @@ type Welcome struct {
 	// Размеры мира — те же, что использует серверная симуляция.
 	Width  float64 `json:"width"`
 	Height float64 `json:"height"`
+	// Параметры движения — нужны клиенту для client-side prediction,
+	// чтобы его симуляция совпадала с серверной.
+	PlayerSpeed  float64 `json:"speed"` // единиц в секунду
+	PlayerRadius float64 `json:"radius"`
 }
 
 // PlayerState — состояние одного игрока в снапшоте.

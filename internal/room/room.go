@@ -165,12 +165,14 @@ func (r *Room) handleJoin(req joinReq) {
 
 	cfg := r.world.Config()
 	welcome, err := json.Marshal(anet.Welcome{
-		Type:     anet.TypeWelcome,
-		PlayerID: uint32(id),
-		Room:     r.name,
-		TickRate: TickRate,
-		Width:    cfg.Width,
-		Height:   cfg.Height,
+		Type:         anet.TypeWelcome,
+		PlayerID:     uint32(id),
+		Room:         r.name,
+		TickRate:     TickRate,
+		Width:        cfg.Width,
+		Height:       cfg.Height,
+		PlayerSpeed:  cfg.PlayerSpeed,
+		PlayerRadius: cfg.PlayerRadius,
 	})
 	if err == nil && !req.conn.TrySend(welcome) {
 		err = anet.ErrClosed
