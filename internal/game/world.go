@@ -4,6 +4,7 @@ package game
 
 import (
 	"math"
+	"math/rand/v2"
 	"slices"
 )
 
@@ -93,20 +94,25 @@ type Snapshot struct {
 type Config struct {
 	Width, Height float64
 	PlayerSpeed   float64 // единиц в секунду
-	PlayerRadius  float64
+	PlayerRadius  float64 // радиус тела: ограничивает движение у краёв мира
+	HitRadius     float64 // радиус хитбокса игрока для попаданий пуль
 
 	BulletSpeed    float64 // единиц в секунду
 	BulletRadius   float64
 	BulletLifetime float64 // секунды
 	FireCooldown   float64 // минимальный интервал между выстрелами, секунды
 	BulletDamage   int
+
+	// Seed инициализирует генератор мира (точки респавна). Одинаковый seed
+	// и одинаковые вводы дают одинаковую симуляцию.
+	Seed uint64
 }
 
 // DefaultConfig — разумные значения по умолчанию.
 func DefaultConfig() Config {
 	return Config{
-		Width: 1000, Height: 1000, PlayerSpeed: 200, PlayerRadius: 16,
-		BulletSpeed: 600, BulletRadius: 4, BulletLifetime: 1.5, FireCooldown: 0.25, BulletDamage: 25,
+		Width: 1000, Height: 1000, PlayerSpeed: 200, PlayerRadius: 16, HitRadius: 12,
+		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
 	}
 }
 
@@ -121,12 +127,19 @@ type World struct {
 	players    map[PlayerID]*Player
 	bullets    []Bullet
 	nextBullet BulletID
-	hits       []Hit // попадания последнего тика
+	hits       []Hit      // попадания последнего тика
+	ids        []PlayerID // переиспользуемый буфер отсортированных ID
+	rng        *rand.Rand // единственный источник случайности мира
 }
 
-// NewWorld создаёт пустой мир.
+// NewWorld создаёт пустой мир. Случайность берётся только из генератора,
+// засеянного cfg.Seed, поэтому симуляция воспроизводима.
 func NewWorld(cfg Config) *World {
-	return &World{cfg: cfg, players: make(map[PlayerID]*Player)}
+	return &World{
+		cfg:     cfg,
+		players: make(map[PlayerID]*Player),
+		rng:     rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
+	}
 }
 
 // Config возвращает параметры мира. Room берёт отсюда размеры для Welcome,
@@ -194,13 +207,14 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	w.tick++
 }
 
+// sortedIDs заполняет переиспользуемый буфер — без аллокаций в установившемся режиме.
 func (w *World) sortedIDs() []PlayerID {
-	ids := make([]PlayerID, 0, len(w.players))
+	w.ids = w.ids[:0]
 	for id := range w.players {
-		ids = append(ids, id)
+		w.ids = append(w.ids, id)
 	}
-	slices.Sort(ids)
-	return ids
+	slices.Sort(w.ids)
+	return w.ids
 }
 
 // updateBullets двигает пули, проверяет попадания и удаляет истёкшие и вылетевшие.
@@ -230,7 +244,7 @@ func (w *World) updateBullets(dt float64, ids []PlayerID) {
 // firstHit возвращает ближайшего к началу отрезка игрока (кроме владельца),
 // которого задевает пуля на пути from→to, и точку попадания.
 func (w *World) firstHit(owner PlayerID, from, to Vec2, ids []PlayerID) (*Player, Vec2, bool) {
-	r := w.cfg.PlayerRadius + w.cfg.BulletRadius
+	r := w.cfg.HitRadius + w.cfg.BulletRadius
 	d := Vec2{X: to.X - from.X, Y: to.Y - from.Y}
 	dd := d.X*d.X + d.Y*d.Y
 
@@ -256,8 +270,8 @@ func (w *World) firstHit(owner PlayerID, from, to Vec2, ids []PlayerID) (*Player
 	return best, bestP, best != nil
 }
 
-// applyHit наносит урон. Погибшая цель сразу возрождается с полным HP,
-// стрелок (если ещё в мире) получает очко.
+// applyHit наносит урон. Погибшая цель сразу возрождается с полным HP
+// в случайной точке, стрелок (если ещё в мире) получает очко.
 func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
 	target.HP -= w.cfg.BulletDamage
 	killed := target.HP <= 0
@@ -266,13 +280,13 @@ func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
 			s.Score++
 		}
 		target.HP = StartHP
-		target.Pos = w.spawnPoint(target.ID)
+		target.Pos = w.randomPoint()
 	}
 	w.hits = append(w.hits, Hit{Target: target.ID, Shooter: shooter, Pos: at, Killed: killed})
 }
 
 // fire создаёт пули для игроков с зажатым огнём и истёкшим кулдауном.
-// Пуля появляется на краю игрока, чтобы не задеть его самого.
+// Пуля вылетает из позиции игрока; по владельцу она не попадает (см. firstHit).
 func (w *World) fire(dt float64, ids []PlayerID) {
 	for _, id := range ids {
 		p := w.players[id]
@@ -281,12 +295,11 @@ func (w *World) fire(dt float64, ids []PlayerID) {
 			continue
 		}
 		dir := Vec2{X: math.Cos(p.Angle), Y: math.Sin(p.Angle)}
-		off := w.cfg.PlayerRadius + w.cfg.BulletRadius
 		w.nextBullet++
 		w.bullets = append(w.bullets, Bullet{
 			ID:    w.nextBullet,
 			Owner: id,
-			Pos:   Vec2{X: p.Pos.X + dir.X*off, Y: p.Pos.Y + dir.Y*off},
+			Pos:   p.Pos,
 			Vel:   Vec2{X: dir.X * w.cfg.BulletSpeed, Y: dir.Y * w.cfg.BulletSpeed},
 			ttl:   w.cfg.BulletLifetime,
 		})
@@ -332,6 +345,17 @@ func (w *World) spawnPoint(id PlayerID) Vec2 {
 		X: w.cfg.Width/2 + radius*math.Cos(angle),
 		Y: w.cfg.Height/2 + radius*math.Sin(angle),
 	})
+}
+
+// randomPoint возвращает равномерно случайную допустимую позицию игрока.
+// Использует только генератор мира, не глобальный rand.
+func (w *World) randomPoint() Vec2 {
+	rx := math.Min(w.cfg.PlayerRadius, w.cfg.Width/2)
+	ry := math.Min(w.cfg.PlayerRadius, w.cfg.Height/2)
+	return Vec2{
+		X: rx + w.rng.Float64()*(w.cfg.Width-2*rx),
+		Y: ry + w.rng.Float64()*(w.cfg.Height-2*ry),
+	}
 }
 
 // clampToWorld держит позицию в [0, Width]×[0, Height] с отступом на радиус,

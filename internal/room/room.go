@@ -72,6 +72,8 @@ type Room struct {
 
 // New создаёт комнату. Её нужно запустить через Run.
 func New(name string, log *slog.Logger) *Room {
+	cfg := game.DefaultConfig()
+	cfg.Seed = uint64(time.Now().UnixNano()) // разные комнаты/запуски — разные респавны
 	return &Room{
 		name:          name,
 		log:           log.With("room", name),
@@ -79,7 +81,7 @@ func New(name string, log *slog.Logger) *Room {
 		leave:         make(chan game.PlayerID, MaxPlayers),
 		inputs:        make(chan anet.PlayerInput, inputsBuffer),
 		done:          make(chan struct{}),
-		world:         game.NewWorld(game.DefaultConfig()),
+		world:         game.NewWorld(cfg),
 		clients:       make(map[game.PlayerID]Client, MaxPlayers),
 		pendingInputs: make(map[game.PlayerID]game.Input, MaxPlayers),
 	}

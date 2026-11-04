@@ -36,9 +36,8 @@ func TestFireSpawnsBulletInAimDirection(t *testing.T) {
 		t.Fatalf("bullets = %d, want 1", len(s.Bullets))
 	}
 	b := s.Bullets[0]
-	off := cfg.PlayerRadius + cfg.BulletRadius
-	if b.Owner != 1 || !approx(b.Pos.X, 500) || !approx(b.Pos.Y, 500+off) {
-		t.Fatalf("bullet = %+v, want owner 1 at (500, %v)", b, 500+off)
+	if b.Owner != 1 || !approx(b.Pos.X, 500) || !approx(b.Pos.Y, 500) {
+		t.Fatalf("bullet = %+v, want owner 1 at shooter position (500, 500)", b)
 	}
 	if !approx(b.Vel.X, 0) || !approx(b.Vel.Y, cfg.BulletSpeed) {
 		t.Fatalf("bullet vel = %v, want (0, %v)", b.Vel, cfg.BulletSpeed)
@@ -47,7 +46,7 @@ func TestFireSpawnsBulletInAimDirection(t *testing.T) {
 	// Следующий тик: пуля летит, новой нет (кулдаун).
 	w.Update(dt, nil)
 	s = w.Snapshot()
-	if len(s.Bullets) != 1 || !approx(s.Bullets[0].Pos.Y, 500+off+cfg.BulletSpeed*dt) {
+	if len(s.Bullets) != 1 || !approx(s.Bullets[0].Pos.Y, 500+cfg.BulletSpeed*dt) {
 		t.Fatalf("after tick bullets = %+v", s.Bullets)
 	}
 }
@@ -94,7 +93,7 @@ func TestBulletHitsOtherPlayer(t *testing.T) {
 	if h.Target != 2 || h.Shooter != 1 || h.Killed {
 		t.Fatalf("hit = %+v, want target 2 shooter 1 not killed", h)
 	}
-	if d := math.Hypot(h.Pos.X-300, h.Pos.Y-500); d > cfg.PlayerRadius+cfg.BulletRadius+eps {
+	if d := math.Hypot(h.Pos.X-300, h.Pos.Y-500); d > cfg.HitRadius+cfg.BulletRadius+eps {
 		t.Fatalf("hit pos %v too far from target (%v)", h.Pos, d)
 	}
 	if hp := playerState(t, w, 2).HP; hp != StartHP-cfg.BulletDamage {
@@ -136,11 +135,74 @@ func TestKillGivesScoreAndRespawns(t *testing.T) {
 		t.Fatalf("hits = %+v, want one kill", hits)
 	}
 	victim := playerState(t, w, 2)
-	if victim.HP != StartHP || victim.Pos != w.spawnPoint(2) {
-		t.Fatalf("victim = %+v, want respawn at %v with %d hp", victim, w.spawnPoint(2), StartHP)
+	if victim.HP != StartHP {
+		t.Fatalf("victim hp = %d, want %d after respawn", victim.HP, StartHP)
+	}
+	if victim.Pos == (Vec2{X: 300, Y: 500}) {
+		t.Fatalf("victim was not moved on respawn: %v", victim.Pos)
+	}
+	r := cfg.PlayerRadius
+	if victim.Pos.X < r || victim.Pos.X > cfg.Width-r || victim.Pos.Y < r || victim.Pos.Y > cfg.Height-r {
+		t.Fatalf("respawn %v outside world", victim.Pos)
 	}
 	if s := playerState(t, w, 1).Score; s != 1 {
 		t.Fatalf("shooter score = %d, want 1", s)
+	}
+	if s := victim.Score; s != 0 {
+		t.Fatalf("victim score = %d, want 0", s)
+	}
+}
+
+// Респавн случайный, но идёт через генератор мира: одинаковый seed —
+// одинаковая точка, другой seed — другая.
+func TestRespawnDeterministicBySeed(t *testing.T) {
+	killAndRespawn := func(seed uint64) Vec2 {
+		cfg := testConfig()
+		cfg.Seed = seed
+		w := NewWorld(cfg)
+		w.AddPlayer(1)
+		w.AddPlayer(2)
+		place(w, 1, 100, 500)
+		place(w, 2, 300, 500)
+		w.players[2].HP = cfg.BulletDamage
+		fireOnce(w, 1, 0)
+		runCollectHits(w, 20)
+		return w.players[2].Pos
+	}
+	a, b, c := killAndRespawn(7), killAndRespawn(7), killAndRespawn(8)
+	if a != b {
+		t.Fatalf("same seed gave different respawns: %v vs %v", a, b)
+	}
+	if a == c {
+		t.Fatalf("different seeds gave the same respawn %v", a)
+	}
+}
+
+func TestCooldownBlocksSecondShotInARow(t *testing.T) {
+	w := newWorldWith(t, 1)
+	place(w, 1, 500, 500)
+	// Два тика подряд со свежим вводом Fire=true: второй выстрел запрещён кулдауном 200 мс.
+	w.Update(dt, map[PlayerID]Input{1: {Seq: 1, Fire: true}})
+	w.Update(dt, map[PlayerID]Input{1: {Seq: 2, Fire: true}})
+	if n := len(w.Snapshot().Bullets); n != 1 {
+		t.Fatalf("bullets after two consecutive fire ticks = %d, want 1", n)
+	}
+}
+
+func TestBulletDoesNotHitShooter(t *testing.T) {
+	w := newWorldWith(t, 1)
+	place(w, 1, 500, 500)
+	// Пуля рождается в центре стрелка — внутри его хитбокса.
+	w.Update(dt, map[PlayerID]Input{1: {Seq: 1, Fire: true}})
+	hits := append(w.Snapshot().Hits, runCollectHits(w, 3)...)
+	if len(hits) != 0 {
+		t.Fatalf("shooter hit by own bullet: %+v", hits)
+	}
+	if hp := playerState(t, w, 1).HP; hp != StartHP {
+		t.Fatalf("shooter hp = %d, want %d", hp, StartHP)
+	}
+	if n := len(w.Snapshot().Bullets); n != 1 {
+		t.Fatalf("bullet removed without a hit: %d left", n)
 	}
 }
 
@@ -190,18 +252,19 @@ func TestBulletRemovedOutsideWorld(t *testing.T) {
 
 func TestBulletExpires(t *testing.T) {
 	cfg := testConfig()
-	cfg.BulletSpeed = 100 // за время жизни (1 с) пролетит 100 — остаётся в мире
+	cfg.BulletSpeed = 100 // за время жизни (1.5 с) пролетит 150 — остаётся в мире
 	w := NewWorld(cfg)
 	w.AddPlayer(1)
 	place(w, 1, 500, 500)
 
+	// В тике выстрела пуля только создаётся; время жизни идёт со следующего тика.
 	w.Update(dt, map[PlayerID]Input{1: {Seq: 1, Fire: true}})
 	w.Update(dt, map[PlayerID]Input{1: {Seq: 2}})
-	runCollectHits(w, 17) // прожила 0.9 с
+	runCollectHits(w, 28) // прожила 29 тиков = 1.45 с
 	if n := len(w.Snapshot().Bullets); n != 1 {
 		t.Fatalf("bullet expired too early: %d", n)
 	}
-	runCollectHits(w, 2)
+	runCollectHits(w, 1) // 30 тиков = 1.5 с
 	if n := len(w.Snapshot().Bullets); n != 0 {
 		t.Fatalf("bullet did not expire: %d", n)
 	}

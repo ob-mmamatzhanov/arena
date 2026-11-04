@@ -1,0 +1,40 @@
+package game
+
+import (
+	"math"
+	"testing"
+)
+
+// BenchmarkUpdate8Players100Bullets — один тик мира с 8 игроками (все держат огонь)
+// и 100 летящими пулями. Перед каждой итерацией пули восстанавливаются из шаблона
+// копированием (без аллокаций), чтобы их число не уплывало из-за попаданий/вылетов.
+func BenchmarkUpdate8Players100Bullets(b *testing.B) {
+	w := NewWorld(DefaultConfig())
+	for id := PlayerID(1); id <= 8; id++ {
+		w.AddPlayer(id)
+	}
+	cfg := w.Config()
+
+	template := make([]Bullet, 100)
+	for i := range template {
+		a := 2 * math.Pi * float64(i) / float64(len(template))
+		template[i] = Bullet{
+			ID:    BulletID(i + 1),
+			Owner: PlayerID(i%8 + 1),
+			Pos:   Vec2{X: 500 + 150*math.Cos(a), Y: 500 + 150*math.Sin(a)},
+			Vel:   Vec2{X: cfg.BulletSpeed * math.Cos(a), Y: cfg.BulletSpeed * math.Sin(a)},
+			ttl:   cfg.BulletLifetime,
+		}
+	}
+	w.bullets = make([]Bullet, 0, len(template)+8)
+	inputs := make(map[PlayerID]Input, 8)
+
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		w.bullets = append(w.bullets[:0], template...)
+		for id := PlayerID(1); id <= 8; id++ {
+			inputs[id] = Input{Seq: uint32(i + 1), MoveX: 1, Angle: float64(id), Fire: true}
+		}
+		w.Update(1.0/20, inputs)
+	}
+}

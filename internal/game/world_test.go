@@ -10,8 +10,9 @@ const eps = 1e-9
 
 func testConfig() Config {
 	return Config{
-		Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10,
-		BulletSpeed: 500, BulletRadius: 2, BulletLifetime: 1, FireCooldown: 0.2, BulletDamage: 25,
+		Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10, HitRadius: 12,
+		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
+		Seed: 1,
 	}
 }
 
