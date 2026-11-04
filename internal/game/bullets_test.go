@@ -15,12 +15,34 @@ func fireOnce(w *World, id PlayerID, angle float64) {
 	w.Update(dt, map[PlayerID]Input{id: {Seq: 2, Angle: angle}})
 }
 
+// Hit — попадание, собранное из событий hit (+ kill) одного тика. Только для тестов.
+type Hit struct {
+	Target  PlayerID
+	Shooter PlayerID
+	Pos     Vec2
+	Killed  bool
+}
+
+// hitsOf собирает попадания из событий тика: kill относится к предшествующему hit.
+func hitsOf(events []Event) []Hit {
+	var hits []Hit
+	for _, e := range events {
+		switch e.Type {
+		case EventHit:
+			hits = append(hits, Hit{Target: e.Target, Shooter: e.Shooter, Pos: e.Pos})
+		case EventKill:
+			hits[len(hits)-1].Killed = true
+		}
+	}
+	return hits
+}
+
 // runCollectHits крутит мир n тиков без ввода и собирает все попадания.
 func runCollectHits(w *World, n int) []Hit {
 	var hits []Hit
 	for range n {
 		w.Update(dt, nil)
-		hits = append(hits, w.Snapshot().Hits...)
+		hits = append(hits, hitsOf(w.Snapshot().Events)...)
 	}
 	return hits
 }
@@ -112,12 +134,12 @@ func TestHitsAreOnlyInTickSnapshot(t *testing.T) {
 	place(w, 1, 100, 500)
 	place(w, 2, 140, 500)
 	fireOnce(w, 1, 0) // цель вплотную — попадание на втором тике
-	if len(w.Snapshot().Hits) != 1 {
-		t.Fatalf("hits on hit tick = %+v, want 1", w.Snapshot().Hits)
+	if len(hitsOf(w.Snapshot().Events)) != 1 {
+		t.Fatalf("hits on hit tick = %+v, want 1", hitsOf(w.Snapshot().Events))
 	}
 	w.Update(dt, nil)
-	if len(w.Snapshot().Hits) != 0 {
-		t.Fatalf("hits leaked to next tick: %+v", w.Snapshot().Hits)
+	if len(hitsOf(w.Snapshot().Events)) != 0 {
+		t.Fatalf("hits leaked to next tick: %+v", hitsOf(w.Snapshot().Events))
 	}
 }
 
@@ -194,7 +216,7 @@ func TestBulletDoesNotHitShooter(t *testing.T) {
 	place(w, 1, 500, 500)
 	// Пуля рождается в центре стрелка — внутри его хитбокса.
 	w.Update(dt, map[PlayerID]Input{1: {Seq: 1, Fire: true}})
-	hits := append(w.Snapshot().Hits, runCollectHits(w, 3)...)
+	hits := append(hitsOf(w.Snapshot().Events), runCollectHits(w, 3)...)
 	if len(hits) != 0 {
 		t.Fatalf("shooter hit by own bullet: %+v", hits)
 	}
@@ -216,7 +238,7 @@ func TestFastBulletDoesNotTunnel(t *testing.T) {
 	place(w, 2, 400, 500)
 
 	fireOnce(w, 1, 0)
-	hits := append(w.Snapshot().Hits, runCollectHits(w, 5)...)
+	hits := append(hitsOf(w.Snapshot().Events), runCollectHits(w, 5)...)
 	if len(hits) != 1 || hits[0].Target != 2 {
 		t.Fatalf("hits = %+v, want one hit on player 2", hits)
 	}
@@ -234,7 +256,7 @@ func TestBulletHitsNearestTargetFirst(t *testing.T) {
 	place(w, 3, 300, 500)
 
 	fireOnce(w, 1, 0)
-	hits := append(w.Snapshot().Hits, runCollectHits(w, 5)...)
+	hits := append(hitsOf(w.Snapshot().Events), runCollectHits(w, 5)...)
 	if len(hits) != 1 || hits[0].Target != 3 {
 		t.Fatalf("hits = %+v, want one hit on nearest player 3", hits)
 	}

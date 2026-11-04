@@ -259,9 +259,17 @@ func TestFireProducesBulletsAndHits(t *testing.T) {
 		t.Fatalf("bullet = %+v, want moving bullet owned by %d", bl, a)
 	}
 
-	hit := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return len(s.Hits) > 0 })
-	h := hit.Hits[0]
-	if h.Target != b || h.Shooter != a {
+	var h anet.Event
+	hit := ca.snapshotUntil(t, func(s anet.Snapshot) bool {
+		for _, e := range s.Events {
+			if e.Type == anet.EventHit {
+				h = e
+				return true
+			}
+		}
+		return false
+	})
+	if h.TargetID != b || h.ShooterID != a {
 		t.Fatalf("hit = %+v, want %d -> %d", h, a, b)
 	}
 	if p, _ := findPlayer(hit, b); p.HP >= game.StartHP {
@@ -287,6 +295,17 @@ func TestBufferInputKeepsFireWithinTick(t *testing.T) {
 	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 4, Fire: true}})
 	if in := rm.pendingInputs[1]; in.Seq != 5 || in.Fire {
 		t.Fatalf("pending = %+v, stale input must be ignored", in)
+	}
+}
+
+func TestBufferInputKeepsDashWithinTick(t *testing.T) {
+	rm := New("unit", slog.New(slog.DiscardHandler))
+	rm.clients[1] = newFakeClient(1)
+
+	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 1, Dash: true}})
+	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 2, MoveY: 1}})
+	if in := rm.pendingInputs[1]; in.Seq != 2 || in.MoveY != 1 || !in.Dash {
+		t.Fatalf("pending = %+v, want seq 2, moveY 1, dash kept", in)
 	}
 }
 
@@ -413,5 +432,80 @@ func TestSnapshotRoundJSONShape(t *testing.T) {
 				t.Fatalf("round JSON =\n %s\nwant\n %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSnapshotPickupsAndBoostedJSON(t *testing.T) {
+	rm := New("test", slog.New(slog.DiscardHandler))
+	c := newFakeClient(2)
+	rm.clients[1] = c
+
+	rm.broadcast(game.Snapshot{
+		Players: []game.PlayerState{{ID: 1, HP: 100, Boosted: true}},
+		Pickups: []game.Pickup{{ID: 7, Type: game.PickupSpeed, Pos: game.Vec2{X: 10, Y: 20}}},
+	})
+	var got struct {
+		Players []map[string]any `json:"players"`
+		Pickups json.RawMessage  `json:"pickups"`
+	}
+	if err := json.Unmarshal(<-c.msgs, &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"id":7,"type":"speed","x":10,"y":20}]`; string(got.Pickups) != want {
+		t.Fatalf("pickups = %s, want %s", got.Pickups, want)
+	}
+	if b, ok := got.Players[0]["boosted"]; !ok || b != true {
+		t.Fatalf("player boosted = %v (present=%v), want true", b, ok)
+	}
+	if _, ok := got.Players[0]["speedUntil"]; ok {
+		t.Fatal("speedUntil must not be sent")
+	}
+
+	// Без пикапов — пустой массив, не null.
+	rm.broadcast(game.Snapshot{})
+	var empty struct {
+		Pickups json.RawMessage `json:"pickups"`
+	}
+	if err := json.Unmarshal(<-c.msgs, &empty); err != nil {
+		t.Fatal(err)
+	}
+	if string(empty.Pickups) != "[]" {
+		t.Fatalf("empty pickups = %s, want []", empty.Pickups)
+	}
+}
+
+// Событие приходит клиенту ровно в одном снапшоте: мир сбрасывает события
+// в начале каждого тика, а комната рассылает снапшот после каждого тика.
+// Сколько выстрелов успеет случиться до отпускания огня, зависит от
+// планировщика, поэтому проверяется точное соответствие: одно событие shot
+// на каждую пулю (пуля видна уже в снапшоте тика своего выстрела).
+func TestShotEventDeliveredOncePerShot(t *testing.T) {
+	rm, _ := startRoom(t)
+	c := newFakeClient(1024)
+	id := join(t, rm, c)
+	c.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, id) })
+
+	shots, bullets := 0, map[uint32]bool{}
+	record := func(s anet.Snapshot) {
+		for _, e := range s.Events {
+			if e.Type == anet.EventShot && e.PlayerID == id {
+				shots++
+			}
+		}
+		for _, b := range s.Bullets {
+			if b.Owner == id {
+				bullets[b.ID] = true
+			}
+		}
+	}
+
+	rm.PushInput(anet.PlayerInput{PlayerID: id, Input: anet.Input{Seq: 1, Fire: true}})
+	record(c.snapshotUntil(t, func(s anet.Snapshot) bool { return len(s.Events) > 0 }))
+	rm.PushInput(anet.PlayerInput{PlayerID: id, Input: anet.Input{Seq: 2}}) // огонь отпущен
+	n := 0
+	c.snapshotUntil(t, func(s anet.Snapshot) bool { record(s); n++; return n == 10 })
+
+	if shots == 0 || shots != len(bullets) {
+		t.Fatalf("shot events = %d, distinct bullets = %d; want one event per shot", shots, len(bullets))
 	}
 }

@@ -2,6 +2,11 @@
 // Пакет не зависит от игровой логики: преобразование типов делает room.
 package net
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 // Типы исходящих сообщений (поле "type").
 const (
 	TypeWelcome  = "welcome"
@@ -16,6 +21,7 @@ type Input struct {
 	MoveY float64 `json:"moveY"`
 	Angle float64 `json:"angle"` // направление взгляда, радианы
 	Fire  bool    `json:"fire"`  // огонь зажат
+	Dash  bool    `json:"dash"`  // рывок (срабатывает, если кулдаун готов)
 }
 
 // PlayerInput — Input, привязанный сервером к конкретному игроку.
@@ -60,6 +66,8 @@ type PlayerState struct {
 	Heat    float64 `json:"heat"` // перегрев [0, 1]: разброс ±heat×0.25 рад, для прицела
 	HP      int     `json:"hp"`
 	Score   int     `json:"score"`
+	Boosted bool    `json:"boosted"` // действует ускорение от пикапа speed
+	DashCd  float64 `json:"dashCd"`  // секунд до готовности рывка, 0 — готов
 	LastSeq uint32  `json:"lastSeq"`
 }
 
@@ -74,13 +82,75 @@ type BulletState struct {
 	VY    float64 `json:"vy"`
 }
 
-// Hit — попадание, случившееся в тике этого снапшота.
-type Hit struct {
-	Target  uint32  `json:"target"`
-	Shooter uint32  `json:"shooter"`
-	X       float64 `json:"x"`
-	Y       float64 `json:"y"`
-	Killed  bool    `json:"killed"`
+// Типы событий (поле event.type).
+const (
+	EventHit       = "hit"
+	EventKill      = "kill"
+	EventShot      = "shot"
+	EventBulletHit = "bulletHit"
+	EventPickup    = "pickup"
+)
+
+// Event — одномоментное событие тика этого снапшота. У каждого типа свой
+// набор полей (MarshalJSON пишет только их):
+//
+//	hit:       {type, x, y, targetId, shooterId}
+//	kill:      {type, targetId, shooterId}
+//	shot:      {type, playerId, x, y}
+//	bulletHit: {type, x, y}            — пуля ударилась о стену или границу
+//	pickup:    {type, playerId, pickupType}
+//
+// Теги нужны для разбора (клиенты на Go, тесты); omitempty на числах не
+// годится — координата 0 и ID законны, поэтому форма задаётся типом.
+type Event struct {
+	Type       string  `json:"type"`
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
+	TargetID   uint32  `json:"targetId"`
+	ShooterID  uint32  `json:"shooterId"`
+	PlayerID   uint32  `json:"playerId"`
+	PickupType string  `json:"pickupType"`
+}
+
+// MarshalJSON сериализует только поля, относящиеся к типу события.
+func (e Event) MarshalJSON() ([]byte, error) {
+	type xy struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	}
+	switch e.Type {
+	case EventHit:
+		return json.Marshal(struct {
+			Type string `json:"type"`
+			xy
+			TargetID  uint32 `json:"targetId"`
+			ShooterID uint32 `json:"shooterId"`
+		}{e.Type, xy{e.X, e.Y}, e.TargetID, e.ShooterID})
+	case EventKill:
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			TargetID  uint32 `json:"targetId"`
+			ShooterID uint32 `json:"shooterId"`
+		}{e.Type, e.TargetID, e.ShooterID})
+	case EventShot:
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			PlayerID uint32 `json:"playerId"`
+			xy
+		}{e.Type, e.PlayerID, xy{e.X, e.Y}})
+	case EventBulletHit:
+		return json.Marshal(struct {
+			Type string `json:"type"`
+			xy
+		}{e.Type, xy{e.X, e.Y}})
+	case EventPickup:
+		return json.Marshal(struct {
+			Type       string `json:"type"`
+			PlayerID   uint32 `json:"playerId"`
+			PickupType string `json:"pickupType"`
+		}{e.Type, e.PlayerID, e.PickupType})
+	}
+	return nil, fmt.Errorf("net: unknown event type %q", e.Type)
 }
 
 // Фазы раунда (поле round.phase).
@@ -110,12 +180,28 @@ type Score struct {
 }
 
 // Snapshot — состояние мира, рассылаемое всем клиентам каждый тик.
-// Bullets и Hits всегда сериализуются массивами (не null).
+// Bullets и Pickups всегда сериализуются массивами (не null);
+// events без событий в тике опускается целиком.
 type Snapshot struct {
 	Type    string        `json:"type"`
 	Tick    uint64        `json:"tick"`
 	Players []PlayerState `json:"players"`
 	Bullets []BulletState `json:"bullets"`
-	Hits    []Hit         `json:"hits"`
+	Events  []Event       `json:"events,omitempty"`
+	Pickups []Pickup      `json:"pickups"`
 	Round   Round         `json:"round"`
+}
+
+// Типы пикапов (поле pickup.type).
+const (
+	PickupHealth = "health"
+	PickupSpeed  = "speed"
+)
+
+// Pickup — пикап на карте.
+type Pickup struct {
+	ID   uint32  `json:"id"`
+	Type string  `json:"type"`
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
 }

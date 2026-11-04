@@ -13,6 +13,10 @@ func testConfig() Config {
 		Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10, HitRadius: 12,
 		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
+		// Спавн пикапов выключен (PickupInterval = 0), параметры — для тестов подбора.
+		MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
+		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
+		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 		Seed: 1,
 	}
 }
@@ -231,7 +235,7 @@ func TestUpdateDeterministic(t *testing.T) {
 	if len(a.Players) != len(b.Players) || a.Tick != b.Tick {
 		t.Fatal("runs diverged")
 	}
-	if !slices.Equal(a.Bullets, b.Bullets) || !slices.Equal(a.Hits, b.Hits) {
+	if !slices.Equal(a.Bullets, b.Bullets) || !slices.Equal(a.Events, b.Events) {
 		t.Fatalf("bullets/hits diverged: %+v vs %+v", a.Bullets, b.Bullets)
 	}
 	for i := range a.Players {

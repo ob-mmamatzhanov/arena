@@ -27,6 +27,7 @@ type Input struct {
 	MoveY float64
 	Angle float64
 	Fire  bool // огонь зажат: стрелять по Angle, как только позволит кулдаун
+	Dash  bool // запрос рывка (одноразовый: действует только в тике этого ввода)
 }
 
 // Player — состояние игрока в мире.
@@ -41,6 +42,13 @@ type Player struct {
 	HP       int
 	Score    int
 	LastSeq  uint32 // seq последнего применённого ввода — для client-side reconciliation
+
+	speedLeft float64 // секунд ускорения от пикапа speed
+
+	dashReq  bool    // в этом тике пришёл запрос рывка
+	dashLeft float64 // секунд до конца текущего рывка (0 — рывка нет)
+	dashDir  Vec2    // единичное направление текущего рывка
+	dashCd   float64 // секунд до готовности следующего рывка
 }
 
 // PlayerState — неизменяемая копия состояния игрока для снапшота.
@@ -51,6 +59,8 @@ type PlayerState struct {
 	Heat    float64
 	HP      int
 	Score   int
+	Boosted bool    // действует ускорение от пикапа
+	DashCd  float64 // секунд до готовности рывка, 0 — готов
 	LastSeq uint32
 }
 
@@ -72,15 +82,6 @@ type BulletState struct {
 	Owner PlayerID
 	Pos   Vec2
 	Vel   Vec2
-}
-
-// Hit — событие попадания за тик. Нужно клиенту, чтобы показать попадание:
-// пуля исчезает в том же тике и в снапшот уже не попадает.
-type Hit struct {
-	Target  PlayerID
-	Shooter PlayerID
-	Pos     Vec2 // точка попадания
-	Killed  bool // цель погибла и возродилась
 }
 
 // Phase — фаза раунда.
@@ -108,12 +109,13 @@ type RoundState struct {
 }
 
 // Snapshot — полное состояние мира на конкретный тик.
-// Hits содержит только попадания, случившиеся в этом тике.
+// Events содержит только события, случившиеся в этом тике.
 type Snapshot struct {
 	Tick    uint64
 	Players []PlayerState
 	Bullets []BulletState
-	Hits    []Hit
+	Events  []Event
+	Pickups []Pickup // по возрастанию ID
 	Round   RoundState
 }
 
@@ -147,6 +149,21 @@ type Config struct {
 	KillLimit        int     // счёт, при достижении которого раунд заканчивается
 	IntermissionTime float64 // пауза между раундами, секунды
 
+	// Пикапы. PickupInterval ≤ 0 отключает их появление.
+	PickupInterval      float64 // секунд между появлениями
+	MaxPickups          int     // одновременно на карте
+	PickupRadius        float64
+	PickupMinPlayerDist float64 // минимальное расстояние от центра игрока при спавне
+	HealthAmount        int     // hp от пикапа health
+	SpeedMultiplier     float64 // множитель скорости от пикапа speed
+	SpeedDuration       float64 // секунды
+
+	// Рывок: импульс DashSpeed, линейно затухающий за DashDuration; повтор
+	// не раньше чем через DashCooldown. DashDuration ≤ 0 отключает рывок.
+	DashSpeed    float64 // единиц в секунду в начале рывка
+	DashDuration float64 // секунды
+	DashCooldown float64 // секунды
+
 	// Seed инициализирует генератор мира (точки респавна). Одинаковый seed
 	// и одинаковые вводы дают одинаковую симуляцию.
 	Seed uint64
@@ -179,6 +196,9 @@ func DefaultConfig() Config {
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
 		Obstacles: DefaultObstacles(),
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
+		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
+		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
+		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 	}
 }
 
@@ -193,24 +213,29 @@ type World struct {
 	players    map[PlayerID]*Player
 	bullets    []Bullet
 	nextBullet BulletID
-	hits       []Hit      // попадания последнего тика
+	events     []Event    // события последнего тика
 	ids        []PlayerID // переиспользуемый буфер отсортированных ID
 	rng        *rand.Rand // единственный источник случайности мира
 
 	phase    Phase
 	timeLeft float64  // до конца текущей фазы
 	winner   PlayerID // победитель завершённого раунда (в intermission)
+
+	pickups     []Pickup
+	nextPickup  PickupID
+	pickupTimer float64 // секунд до следующего появления пикапа
 }
 
 // NewWorld создаёт пустой мир; первый раунд начинается сразу. Случайность
 // берётся только из генератора, засеянного cfg.Seed, поэтому симуляция воспроизводима.
 func NewWorld(cfg Config) *World {
 	return &World{
-		cfg:      cfg,
-		players:  make(map[PlayerID]*Player),
-		rng:      rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
-		phase:    PhasePlay,
-		timeLeft: max(cfg.RoundTime, 0),
+		cfg:         cfg,
+		players:     make(map[PlayerID]*Player),
+		rng:         rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
+		phase:       PhasePlay,
+		timeLeft:    max(cfg.RoundTime, 0),
+		pickupTimer: cfg.PickupInterval,
 	}
 }
 
@@ -255,7 +280,7 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	if dt <= 0 || math.IsNaN(dt) || math.IsInf(dt, 0) {
 		return
 	}
-	w.hits = w.hits[:0]
+	w.events = w.events[:0] // события предыдущего тика уже ушли в его снапшот
 	if w.phase == PhaseIntermission {
 		w.timeLeft = max(w.timeLeft-dt, 0)
 		if w.timeLeft <= timeEps {
@@ -275,18 +300,17 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 			p.Angle = a
 		}
 		p.Fire = in.Fire
+		p.dashReq = in.Dash
 		p.LastSeq = in.Seq
 	}
 
 	for _, p := range w.players {
-		p.Pos = w.move(p.Pos, Vec2{
-			X: p.Move.X * w.cfg.PlayerSpeed * dt,
-			Y: p.Move.Y * w.cfg.PlayerSpeed * dt,
-		})
+		p.Pos = w.move(p.Pos, w.displacement(p, dt))
 	}
 
 	// Порядок по ID — чтобы результат не зависел от порядка обхода map.
 	ids := w.sortedIDs()
+	w.updatePickups(dt, ids)
 	w.updateBullets(dt, ids)
 	w.fire(dt, ids)
 	w.advanceRound(dt, ids)
@@ -343,14 +367,14 @@ func (w *World) endRound(ids []PlayerID) {
 }
 
 // startRound начинает новый раунд: у всех полное HP и нулевой счёт, все
-// респавнятся в случайных свободных точках, пули и вооружение сбрасываются.
+// респавнятся в случайных свободных точках, пули, пикапы и вооружение сбрасываются.
 func (w *World) startRound() {
 	w.phase = PhasePlay
 	w.timeLeft = max(w.cfg.RoundTime, 0)
 	w.winner = 0
 	clear(w.bullets)
 	w.bullets = w.bullets[:0]
-	w.hits = w.hits[:0]
+	w.resetPickups()
 	for _, id := range w.sortedIDs() { // порядок по ID — детерминированный rng
 		p := w.players[id]
 		p.HP = StartHP
@@ -360,6 +384,8 @@ func (w *World) startRound() {
 		p.Fire = false
 		p.cooldown = 0
 		p.Heat = 0
+		p.speedLeft = 0
+		p.dashReq, p.dashLeft, p.dashCd = false, 0, 0
 	}
 }
 
@@ -425,7 +451,12 @@ func sweepAxis(from, to, other, lo, hi, oLo, oHi, r float64) float64 {
 // Касание допустимо; допуск contactEps гасит ошибку округления в точке касания,
 // которую выставляет sweepAxis (иначе d² может оказаться на ulp меньше r²).
 func (w *World) isFree(p Vec2) bool {
-	r := w.cfg.PlayerRadius - contactEps
+	return w.circleFree(p, w.cfg.PlayerRadius)
+}
+
+// circleFree — то же для круга произвольного радиуса (например, пикапа).
+func (w *World) circleFree(p Vec2, radius float64) bool {
+	r := radius - contactEps
 	for _, o := range w.cfg.Obstacles {
 		dx := p.X - clamp(p.X, o.X, o.X+o.W)
 		dy := p.Y - clamp(p.Y, o.Y, o.Y+o.H)
@@ -512,14 +543,23 @@ func (w *World) updateBullets(dt float64, ids []PlayerID) {
 
 		target, at, tHit, hit := w.firstHit(b.Owner, from, to, ids)
 		if tWall, wall := w.firstObstacleT(from, to); wall && (!hit || tWall < tHit) {
-			continue // пуля разбилась о препятствие
+			// Пуля разбилась о препятствие; Pos — центр пули в момент касания.
+			w.emit(Event{Type: EventBulletHit, Pos: Vec2{
+				X: from.X + (to.X-from.X)*tWall,
+				Y: from.Y + (to.Y-from.Y)*tWall,
+			}})
+			continue
 		}
 		if hit {
 			w.applyHit(b.Owner, target, at)
 			continue
 		}
-		if b.ttl <= timeEps || to.X < 0 || to.X > w.cfg.Width || to.Y < 0 || to.Y > w.cfg.Height {
+		if to.X < 0 || to.X > w.cfg.Width || to.Y < 0 || to.Y > w.cfg.Height {
+			w.emit(Event{Type: EventBulletHit, Pos: w.exitPoint(from, to)}) // ударилась о границу
 			continue
+		}
+		if b.ttl <= timeEps {
+			continue // истекла в полёте — без события
 		}
 		b.Pos = to
 		alive = append(alive, b)
@@ -562,15 +602,15 @@ func (w *World) firstHit(owner PlayerID, from, to Vec2, ids []PlayerID) (*Player
 // в случайной точке, стрелок (если ещё в мире) получает очко.
 func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
 	target.HP -= w.cfg.BulletDamage
-	killed := target.HP <= 0
-	if killed {
+	w.emit(Event{Type: EventHit, Pos: at, Target: target.ID, Shooter: shooter})
+	if target.HP <= 0 {
 		if s, ok := w.players[shooter]; ok {
 			s.Score++
 		}
 		target.HP = StartHP
 		target.Pos = w.respawnPoint(target.ID)
+		w.emit(Event{Type: EventKill, Target: target.ID, Shooter: shooter})
 	}
-	w.hits = append(w.hits, Hit{Target: target.ID, Shooter: shooter, Pos: at, Killed: killed})
 }
 
 // fire создаёт пули для игроков с зажатым огнём и истёкшим кулдауном.
@@ -598,6 +638,7 @@ func (w *World) fire(dt float64, ids []PlayerID) {
 			Vel:   Vec2{X: dir.X * w.cfg.BulletSpeed, Y: dir.Y * w.cfg.BulletSpeed},
 			ttl:   w.cfg.BulletLifetime,
 		})
+		w.emit(Event{Type: EventShot, Player: id, Pos: p.Pos})
 		p.cooldown = w.cfg.FireCooldown
 	}
 }
@@ -624,6 +665,8 @@ func (w *World) Snapshot() Snapshot {
 			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
+			Boosted: p.speedLeft > timeEps,
+			DashCd:  p.dashCooldownLeft(),
 			LastSeq: p.LastSeq,
 		})
 	}
@@ -648,7 +691,14 @@ func (w *World) Snapshot() Snapshot {
 			round.Scores[i] = ScoreEntry{ID: p.ID, Score: p.Score}
 		}
 	}
-	return Snapshot{Tick: w.tick, Players: ps, Bullets: bs, Hits: slices.Clone(w.hits), Round: round}
+	return Snapshot{
+		Tick:    w.tick,
+		Players: ps,
+		Bullets: bs,
+		Events:  slices.Clone(w.events),
+		Pickups: slices.Clone(w.pickups), // ID растут при добавлении, порядок сохраняется
+		Round:   round,
+	}
 }
 
 // spawnPoint раскладывает игроков по окружности вокруг центра арены.

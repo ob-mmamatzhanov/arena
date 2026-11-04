@@ -202,19 +202,20 @@ func (r *Room) handleLeave(id game.PlayerID) {
 }
 
 // bufferInput сохраняет самый свежий (по seq) ввод игрока до следующего тика.
-// Fire накапливается по OR за тик: иначе короткое нажатие, за которым в том же
-// тике пришёл ввод с Fire=false, потерялось бы.
+// Fire и Dash накапливаются по OR за тик: иначе короткое нажатие, за которым
+// в том же тике пришёл ввод без него, потерялось бы.
 func (r *Room) bufferInput(pi anet.PlayerInput) {
 	id := game.PlayerID(pi.PlayerID)
 	if _, ok := r.clients[id]; !ok {
 		return
 	}
-	fire := pi.Input.Fire
+	fire, dash := pi.Input.Fire, pi.Input.Dash
 	if prev, ok := r.pendingInputs[id]; ok {
 		if pi.Input.Seq <= prev.Seq {
 			return
 		}
 		fire = fire || prev.Fire
+		dash = dash || prev.Dash
 	}
 	r.pendingInputs[id] = game.Input{
 		Seq:   pi.Input.Seq,
@@ -222,6 +223,7 @@ func (r *Room) bufferInput(pi anet.PlayerInput) {
 		MoveY: pi.Input.MoveY,
 		Angle: pi.Input.Angle,
 		Fire:  fire,
+		Dash:  dash,
 	}
 }
 
@@ -254,7 +256,24 @@ func (r *Room) broadcast(s game.Snapshot) {
 		Tick:    s.Tick,
 		Players: make([]anet.PlayerState, len(s.Players)),
 		Bullets: make([]anet.BulletState, len(s.Bullets)),
-		Hits:    make([]anet.Hit, len(s.Hits)),
+		Pickups: make([]anet.Pickup, len(s.Pickups)),
+	}
+	if len(s.Events) > 0 { // nil → поле events опускается (omitempty)
+		msg.Events = make([]anet.Event, len(s.Events))
+		for i, e := range s.Events {
+			msg.Events[i] = anet.Event{
+				Type:       string(e.Type),
+				X:          e.Pos.X,
+				Y:          e.Pos.Y,
+				TargetID:   uint32(e.Target),
+				ShooterID:  uint32(e.Shooter),
+				PlayerID:   uint32(e.Player),
+				PickupType: string(e.Pickup),
+			}
+		}
+	}
+	for i, pk := range s.Pickups {
+		msg.Pickups[i] = anet.Pickup{ID: uint32(pk.ID), Type: string(pk.Type), X: pk.Pos.X, Y: pk.Pos.Y}
 	}
 	for i, b := range s.Bullets {
 		msg.Bullets[i] = anet.BulletState{
@@ -266,15 +285,6 @@ func (r *Room) broadcast(s game.Snapshot) {
 			VY:    b.Vel.Y,
 		}
 	}
-	for i, h := range s.Hits {
-		msg.Hits[i] = anet.Hit{
-			Target:  uint32(h.Target),
-			Shooter: uint32(h.Shooter),
-			X:       h.Pos.X,
-			Y:       h.Pos.Y,
-			Killed:  h.Killed,
-		}
-	}
 	for i, p := range s.Players {
 		msg.Players[i] = anet.PlayerState{
 			ID:      uint32(p.ID),
@@ -284,6 +294,8 @@ func (r *Room) broadcast(s game.Snapshot) {
 			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
+			Boosted: p.Boosted,
+			DashCd:  p.DashCd,
 			LastSeq: p.LastSeq,
 		}
 	}
