@@ -72,6 +72,8 @@ type Room struct {
 
 // New создаёт комнату. Её нужно запустить через Run.
 func New(name string, log *slog.Logger) *Room {
+	cfg := game.DefaultConfig()
+	cfg.Seed = uint64(time.Now().UnixNano()) // разные комнаты/запуски — разные респавны
 	return &Room{
 		name:          name,
 		log:           log.With("room", name),
@@ -79,7 +81,7 @@ func New(name string, log *slog.Logger) *Room {
 		leave:         make(chan game.PlayerID, MaxPlayers),
 		inputs:        make(chan anet.PlayerInput, inputsBuffer),
 		done:          make(chan struct{}),
-		world:         game.NewWorld(game.DefaultConfig()),
+		world:         game.NewWorld(cfg),
 		clients:       make(map[game.PlayerID]Client, MaxPlayers),
 		pendingInputs: make(map[game.PlayerID]game.Input, MaxPlayers),
 	}
@@ -164,6 +166,10 @@ func (r *Room) handleJoin(req joinReq) {
 	r.pendingJoins = append(r.pendingJoins, id)
 
 	cfg := r.world.Config()
+	obstacles := make([]anet.Obstacle, len(cfg.Obstacles))
+	for i, o := range cfg.Obstacles {
+		obstacles[i] = anet.Obstacle{X: o.X, Y: o.Y, W: o.W, H: o.H}
+	}
 	welcome, err := json.Marshal(anet.Welcome{
 		Type:         anet.TypeWelcome,
 		PlayerID:     uint32(id),
@@ -173,6 +179,7 @@ func (r *Room) handleJoin(req joinReq) {
 		Height:       cfg.Height,
 		PlayerSpeed:  cfg.PlayerSpeed,
 		PlayerRadius: cfg.PlayerRadius,
+		Obstacles:    obstacles,
 	})
 	if err == nil && !req.conn.TrySend(welcome) {
 		err = anet.ErrClosed
@@ -274,9 +281,19 @@ func (r *Room) broadcast(s game.Snapshot) {
 			X:       p.Pos.X,
 			Y:       p.Pos.Y,
 			Angle:   p.Angle,
+			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
 			LastSeq: p.LastSeq,
+		}
+	}
+	msg.Round = anet.Round{Phase: string(s.Round.Phase), TimeLeft: s.Round.TimeLeft}
+	if s.Round.Phase == game.PhaseIntermission {
+		winner := uint32(s.Round.WinnerID)
+		msg.Round.WinnerID = &winner
+		msg.Round.Scores = make([]anet.Score, len(s.Round.Scores))
+		for i, sc := range s.Round.Scores {
+			msg.Round.Scores[i] = anet.Score{ID: uint32(sc.ID), Score: sc.Score}
 		}
 	}
 	data, err := json.Marshal(msg)

@@ -164,6 +164,15 @@ func TestJoinSendsWelcomeAndAddsPlayerOnTick(t *testing.T) {
 	if cfg := rm.world.Config(); w.PlayerSpeed != cfg.PlayerSpeed || w.PlayerRadius != cfg.PlayerRadius {
 		t.Fatalf("welcome speed/radius = %v/%v, want %v/%v", w.PlayerSpeed, w.PlayerRadius, cfg.PlayerSpeed, cfg.PlayerRadius)
 	}
+	obs := rm.world.Config().Obstacles
+	if len(obs) == 0 || len(w.Obstacles) != len(obs) {
+		t.Fatalf("welcome obstacles = %+v, want %d from world config", w.Obstacles, len(obs))
+	}
+	for i, o := range obs {
+		if got := w.Obstacles[i]; got != (anet.Obstacle{X: o.X, Y: o.Y, W: o.W, H: o.H}) {
+			t.Fatalf("welcome obstacle %d = %+v, want %+v", i, got, o)
+		}
+	}
 	c.snapshotUntil(t, func(s anet.Snapshot) bool {
 		p, ok := findPlayer(s, id)
 		return ok && p.HP == game.StartHP
@@ -360,5 +369,49 @@ func TestJoinRespectsContext(t *testing.T) {
 	defer cancel()
 	if _, err := rm.Join(ctx, newFakeClient(1)); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want DeadlineExceeded", err)
+	}
+}
+
+func TestSnapshotRoundJSONShape(t *testing.T) {
+	tests := []struct {
+		name  string
+		round game.RoundState
+		want  string
+	}{
+		{
+			"play carries only phase and timeLeft",
+			game.RoundState{Phase: game.PhasePlay, TimeLeft: 42.5},
+			`{"phase":"play","timeLeft":42.5}`,
+		},
+		{
+			"intermission carries winner and scores",
+			game.RoundState{Phase: game.PhaseIntermission, TimeLeft: 8, WinnerID: 2,
+				Scores: []game.ScoreEntry{{ID: 1, Score: 3}, {ID: 2, Score: 10}}},
+			`{"phase":"intermission","timeLeft":8,"winnerId":2,"scores":[{"id":1,"score":3},{"id":2,"score":10}]}`,
+		},
+		{
+			"draw keeps winnerId 0",
+			game.RoundState{Phase: game.PhaseIntermission, TimeLeft: 8,
+				Scores: []game.ScoreEntry{{ID: 1, Score: 0}}},
+			`{"phase":"intermission","timeLeft":8,"winnerId":0,"scores":[{"id":1,"score":0}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rm := New("test", slog.New(slog.DiscardHandler))
+			c := newFakeClient(1)
+			rm.clients[1] = c
+			rm.broadcast(game.Snapshot{Round: tt.round})
+
+			var raw struct {
+				Round json.RawMessage `json:"round"`
+			}
+			if err := json.Unmarshal(<-c.msgs, &raw); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(raw.Round); got != tt.want {
+				t.Fatalf("round JSON =\n %s\nwant\n %s", got, tt.want)
+			}
+		})
 	}
 }

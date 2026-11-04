@@ -38,6 +38,17 @@ type Welcome struct {
 	// чтобы его симуляция совпадала с серверной.
 	PlayerSpeed  float64 `json:"speed"` // единиц в секунду
 	PlayerRadius float64 `json:"radius"`
+	// Obstacles статичны, поэтому отдаются один раз здесь и не дублируются
+	// в снапшотах. Всегда массив (не null).
+	Obstacles []Obstacle `json:"obstacles"`
+}
+
+// Obstacle — препятствие карты: левый верхний угол (x, y), ширина w, высота h.
+type Obstacle struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
 }
 
 // PlayerState — состояние одного игрока в снапшоте.
@@ -46,6 +57,7 @@ type PlayerState struct {
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
 	Angle   float64 `json:"angle"`
+	Heat    float64 `json:"heat"` // перегрев [0, 1]: разброс ±heat×0.25 рад, для прицела
 	HP      int     `json:"hp"`
 	Score   int     `json:"score"`
 	LastSeq uint32  `json:"lastSeq"`
@@ -71,6 +83,32 @@ type Hit struct {
 	Killed  bool    `json:"killed"`
 }
 
+// Фазы раунда (поле round.phase).
+const (
+	PhasePlay         = "play"
+	PhaseIntermission = "intermission"
+)
+
+// Round — состояние раунда.
+//
+//	play:         {phase, timeLeft}
+//	intermission: {phase, timeLeft, winnerId, scores}
+//
+// winnerId = 0 — победителя нет (ничья или ни одного фрага). Указатель нужен,
+// чтобы в intermission поле присутствовало и с нулём, а в play отсутствовало.
+type Round struct {
+	Phase    string  `json:"phase"`
+	TimeLeft float64 `json:"timeLeft"`
+	WinnerID *uint32 `json:"winnerId,omitempty"`
+	Scores   []Score `json:"scores,omitempty"`
+}
+
+// Score — итоговый счёт игрока в раунде.
+type Score struct {
+	ID    uint32 `json:"id"`
+	Score int    `json:"score"`
+}
+
 // Snapshot — состояние мира, рассылаемое всем клиентам каждый тик.
 // Bullets и Hits всегда сериализуются массивами (не null).
 type Snapshot struct {
@@ -79,4 +117,5 @@ type Snapshot struct {
 	Players []PlayerState `json:"players"`
 	Bullets []BulletState `json:"bullets"`
 	Hits    []Hit         `json:"hits"`
+	Round   Round         `json:"round"`
 }
