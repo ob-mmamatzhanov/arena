@@ -82,6 +82,32 @@ type Hit struct {
 	Killed  bool    `json:"killed"`
 }
 
+// Фазы раунда (поле round.phase).
+const (
+	PhasePlay         = "play"
+	PhaseIntermission = "intermission"
+)
+
+// Round — состояние раунда.
+//
+//	play:         {phase, timeLeft}
+//	intermission: {phase, timeLeft, winnerId, scores}
+//
+// winnerId = 0 — победителя нет (ничья или ни одного фрага). Указатель нужен,
+// чтобы в intermission поле присутствовало и с нулём, а в play отсутствовало.
+type Round struct {
+	Phase    string  `json:"phase"`
+	TimeLeft float64 `json:"timeLeft"`
+	WinnerID *uint32 `json:"winnerId,omitempty"`
+	Scores   []Score `json:"scores,omitempty"`
+}
+
+// Score — итоговый счёт игрока в раунде.
+type Score struct {
+	ID    uint32 `json:"id"`
+	Score int    `json:"score"`
+}
+
 // Snapshot — состояние мира, рассылаемое всем клиентам каждый тик.
 // Bullets и Hits всегда сериализуются массивами (не null).
 type Snapshot struct {
@@ -90,4 +116,5 @@ type Snapshot struct {
 	Players []PlayerState `json:"players"`
 	Bullets []BulletState `json:"bullets"`
 	Hits    []Hit         `json:"hits"`
+	Round   Round         `json:"round"`
 }

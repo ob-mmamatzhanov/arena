@@ -20,6 +20,9 @@ func BenchmarkUpdate8Players100Bullets(b *testing.B) {
 		b.Run(bc.name, func(b *testing.B) {
 			cfg := DefaultConfig()
 			cfg.Obstacles = bc.obstacles
+			// Без раундов: иначе за сотни тысяч итераций мир уходил бы в
+			// intermission, где Update почти ничего не делает, и цифры врали бы.
+			cfg.RoundTime, cfg.KillLimit = 0, 0
 			benchUpdate(b, cfg)
 		})
 	}

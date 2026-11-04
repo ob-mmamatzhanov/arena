@@ -286,6 +286,15 @@ func (r *Room) broadcast(s game.Snapshot) {
 			LastSeq: p.LastSeq,
 		}
 	}
+	msg.Round = anet.Round{Phase: string(s.Round.Phase), TimeLeft: s.Round.TimeLeft}
+	if s.Round.Phase == game.PhaseIntermission {
+		winner := uint32(s.Round.WinnerID)
+		msg.Round.WinnerID = &winner
+		msg.Round.Scores = make([]anet.Score, len(s.Round.Scores))
+		for i, sc := range s.Round.Scores {
+			msg.Round.Scores[i] = anet.Score{ID: uint32(sc.ID), Score: sc.Score}
+		}
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		r.log.Error("marshal snapshot", "err", err)

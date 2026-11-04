@@ -371,3 +371,47 @@ func TestJoinRespectsContext(t *testing.T) {
 		t.Fatalf("err = %v, want DeadlineExceeded", err)
 	}
 }
+
+func TestSnapshotRoundJSONShape(t *testing.T) {
+	tests := []struct {
+		name  string
+		round game.RoundState
+		want  string
+	}{
+		{
+			"play carries only phase and timeLeft",
+			game.RoundState{Phase: game.PhasePlay, TimeLeft: 42.5},
+			`{"phase":"play","timeLeft":42.5}`,
+		},
+		{
+			"intermission carries winner and scores",
+			game.RoundState{Phase: game.PhaseIntermission, TimeLeft: 8, WinnerID: 2,
+				Scores: []game.ScoreEntry{{ID: 1, Score: 3}, {ID: 2, Score: 10}}},
+			`{"phase":"intermission","timeLeft":8,"winnerId":2,"scores":[{"id":1,"score":3},{"id":2,"score":10}]}`,
+		},
+		{
+			"draw keeps winnerId 0",
+			game.RoundState{Phase: game.PhaseIntermission, TimeLeft: 8,
+				Scores: []game.ScoreEntry{{ID: 1, Score: 0}}},
+			`{"phase":"intermission","timeLeft":8,"winnerId":0,"scores":[{"id":1,"score":0}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rm := New("test", slog.New(slog.DiscardHandler))
+			c := newFakeClient(1)
+			rm.clients[1] = c
+			rm.broadcast(game.Snapshot{Round: tt.round})
+
+			var raw struct {
+				Round json.RawMessage `json:"round"`
+			}
+			if err := json.Unmarshal(<-c.msgs, &raw); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(raw.Round); got != tt.want {
+				t.Fatalf("round JSON =\n %s\nwant\n %s", got, tt.want)
+			}
+		})
+	}
+}

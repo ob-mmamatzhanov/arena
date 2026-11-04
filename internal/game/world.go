@@ -81,6 +81,30 @@ type Hit struct {
 	Killed  bool // цель погибла и возродилась
 }
 
+// Phase — фаза раунда.
+type Phase string
+
+const (
+	PhasePlay         Phase = "play"         // идёт бой
+	PhaseIntermission Phase = "intermission" // пауза между раундами: мир заморожен
+)
+
+// ScoreEntry — счёт игрока в итогах раунда.
+type ScoreEntry struct {
+	ID    PlayerID
+	Score int
+}
+
+// RoundState — состояние раунда для снапшота.
+type RoundState struct {
+	Phase    Phase
+	TimeLeft float64 // секунд до конца текущей фазы
+	// WinnerID и Scores заполняются только в PhaseIntermission.
+	// WinnerID = 0 — победителя нет (ничья или ни одного фрага).
+	WinnerID PlayerID
+	Scores   []ScoreEntry // по возрастанию ID
+}
+
 // Snapshot — полное состояние мира на конкретный тик.
 // Hits содержит только попадания, случившиеся в этом тике.
 type Snapshot struct {
@@ -88,6 +112,7 @@ type Snapshot struct {
 	Players []PlayerState
 	Bullets []BulletState
 	Hits    []Hit
+	Round   RoundState
 }
 
 // Config — параметры мира.
@@ -106,6 +131,12 @@ type Config struct {
 	// Obstacles — статические препятствия карты, непроходимые для игроков и пуль.
 	// Срез не меняется после создания мира.
 	Obstacles []Obstacle
+
+	// Раунды. RoundTime ≤ 0 отключает лимит времени, KillLimit ≤ 0 — лимит фрагов
+	// (оба отключены — раунд бесконечен).
+	RoundTime        float64 // длительность раунда, секунды
+	KillLimit        int     // счёт, при достижении которого раунд заканчивается
+	IntermissionTime float64 // пауза между раундами, секунды
 
 	// Seed инициализирует генератор мира (точки респавна). Одинаковый seed
 	// и одинаковые вводы дают одинаковую симуляцию.
@@ -137,6 +168,7 @@ func DefaultConfig() Config {
 		Width: 1000, Height: 1000, PlayerSpeed: 200, PlayerRadius: 12, HitRadius: 12,
 		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
 		Obstacles: DefaultObstacles(),
+		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 	}
 }
 
@@ -154,15 +186,21 @@ type World struct {
 	hits       []Hit      // попадания последнего тика
 	ids        []PlayerID // переиспользуемый буфер отсортированных ID
 	rng        *rand.Rand // единственный источник случайности мира
+
+	phase    Phase
+	timeLeft float64  // до конца текущей фазы
+	winner   PlayerID // победитель завершённого раунда (в intermission)
 }
 
-// NewWorld создаёт пустой мир. Случайность берётся только из генератора,
-// засеянного cfg.Seed, поэтому симуляция воспроизводима.
+// NewWorld создаёт пустой мир; первый раунд начинается сразу. Случайность
+// берётся только из генератора, засеянного cfg.Seed, поэтому симуляция воспроизводима.
 func NewWorld(cfg Config) *World {
 	return &World{
-		cfg:     cfg,
-		players: make(map[PlayerID]*Player),
-		rng:     rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
+		cfg:      cfg,
+		players:  make(map[PlayerID]*Player),
+		rng:      rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
+		phase:    PhasePlay,
+		timeLeft: max(cfg.RoundTime, 0),
 	}
 }
 
@@ -182,7 +220,8 @@ func (w *World) HasPlayer(id PlayerID) bool {
 	return ok
 }
 
-// AddPlayer добавляет игрока в детерминированную точку спавна.
+// AddPlayer добавляет игрока в детерминированную точку спавна. Игрок входит
+// в текущий раунд (в любой фазе) с нулевым счётом.
 // Повторное добавление существующего ID ничего не делает.
 func (w *World) AddPlayer(id PlayerID) {
 	if _, ok := w.players[id]; ok {
@@ -199,10 +238,23 @@ func (w *World) RemovePlayer(id PlayerID) {
 // Update продвигает симуляцию на dt секунд, применяя inputs.
 // Вводы для неизвестных игроков и устаревшие (seq <= LastSeq) игнорируются.
 // Игрок без нового ввода продолжает двигаться по последнему направлению.
+//
+// В intermission мир заморожен: вводы отбрасываются целиком (LastSeq не растёт),
+// игроки и пули стоят, идёт только таймер паузы; по его истечении — новый раунд.
 func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	if dt <= 0 || math.IsNaN(dt) || math.IsInf(dt, 0) {
 		return
 	}
+	w.hits = w.hits[:0]
+	if w.phase == PhaseIntermission {
+		w.timeLeft = max(w.timeLeft-dt, 0)
+		if w.timeLeft <= timeEps {
+			w.startRound()
+		}
+		w.tick++
+		return
+	}
+
 	for id, in := range inputs {
 		p, ok := w.players[id]
 		if !ok || in.Seq <= p.LastSeq {
@@ -225,10 +277,79 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 
 	// Порядок по ID — чтобы результат не зависел от порядка обхода map.
 	ids := w.sortedIDs()
-	w.hits = w.hits[:0]
 	w.updateBullets(dt, ids)
 	w.fire(dt, ids)
+	w.advanceRound(dt, ids)
 	w.tick++
+}
+
+// advanceRound ведёт таймер раунда и завершает раунд по времени или лимиту фрагов.
+// Проверяется после попаданий, так что фраг, достигший лимита, засчитывается в этом же тике.
+func (w *World) advanceRound(dt float64, ids []PlayerID) {
+	timeUp := false
+	if w.cfg.RoundTime > 0 {
+		w.timeLeft = max(w.timeLeft-dt, 0)
+		timeUp = w.timeLeft <= timeEps
+	}
+	if timeUp || w.killLimitReached(ids) {
+		w.endRound(ids)
+	}
+}
+
+func (w *World) killLimitReached(ids []PlayerID) bool {
+	if w.cfg.KillLimit <= 0 {
+		return false
+	}
+	for _, id := range ids {
+		if w.players[id].Score >= w.cfg.KillLimit {
+			return true
+		}
+	}
+	return false
+}
+
+// endRound фиксирует победителя и переходит в intermission.
+// Победитель — единственный игрок с наибольшим счётом; при ничьей или
+// нулевом счёте победителя нет (0).
+func (w *World) endRound(ids []PlayerID) {
+	w.winner = 0
+	best, tie := 0, false
+	for _, id := range ids {
+		switch s := w.players[id].Score; {
+		case s > best:
+			w.winner, best, tie = id, s, false
+		case s == best && s > 0:
+			tie = true
+		}
+	}
+	if tie {
+		w.winner = 0
+	}
+	w.phase = PhaseIntermission
+	w.timeLeft = max(w.cfg.IntermissionTime, 0)
+	if w.timeLeft <= timeEps {
+		w.startRound() // паузы нет — сразу новый раунд
+	}
+}
+
+// startRound начинает новый раунд: у всех полное HP и нулевой счёт, все
+// респавнятся в случайных свободных точках, пули и вооружение сбрасываются.
+func (w *World) startRound() {
+	w.phase = PhasePlay
+	w.timeLeft = max(w.cfg.RoundTime, 0)
+	w.winner = 0
+	clear(w.bullets)
+	w.bullets = w.bullets[:0]
+	w.hits = w.hits[:0]
+	for _, id := range w.sortedIDs() { // порядок по ID — детерминированный rng
+		p := w.players[id]
+		p.HP = StartHP
+		p.Score = 0
+		p.Pos = w.respawnPoint(id)
+		p.Move = Vec2{}
+		p.Fire = false
+		p.cooldown = 0
+	}
 }
 
 // contactEps допускает погрешность float при сравнении с точкой касания.
@@ -489,7 +610,15 @@ func (w *World) Snapshot() Snapshot {
 	for i, b := range w.bullets {
 		bs[i] = BulletState{ID: b.ID, Owner: b.Owner, Pos: b.Pos, Vel: b.Vel}
 	}
-	return Snapshot{Tick: w.tick, Players: ps, Bullets: bs, Hits: slices.Clone(w.hits)}
+	round := RoundState{Phase: w.phase, TimeLeft: w.timeLeft}
+	if w.phase == PhaseIntermission {
+		round.WinnerID = w.winner
+		round.Scores = make([]ScoreEntry, len(ps))
+		for i, p := range ps {
+			round.Scores[i] = ScoreEntry{ID: p.ID, Score: p.Score}
+		}
+	}
+	return Snapshot{Tick: w.tick, Players: ps, Bullets: bs, Hits: slices.Clone(w.hits), Round: round}
 }
 
 // spawnPoint раскладывает игроков по окружности вокруг центра арены.
