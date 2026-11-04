@@ -27,6 +27,7 @@ type Input struct {
 	MoveY float64
 	Angle float64
 	Fire  bool // огонь зажат: стрелять по Angle, как только позволит кулдаун
+	Dash  bool // запрос рывка (одноразовый: действует только в тике этого ввода)
 }
 
 // Player — состояние игрока в мире.
@@ -43,6 +44,11 @@ type Player struct {
 	LastSeq  uint32 // seq последнего применённого ввода — для client-side reconciliation
 
 	speedLeft float64 // секунд ускорения от пикапа speed
+
+	dashReq  bool    // в этом тике пришёл запрос рывка
+	dashLeft float64 // секунд до конца текущего рывка (0 — рывка нет)
+	dashDir  Vec2    // единичное направление текущего рывка
+	dashCd   float64 // секунд до готовности следующего рывка
 }
 
 // PlayerState — неизменяемая копия состояния игрока для снапшота.
@@ -53,7 +59,8 @@ type PlayerState struct {
 	Heat    float64
 	HP      int
 	Score   int
-	Boosted bool // действует ускорение от пикапа
+	Boosted bool    // действует ускорение от пикапа
+	DashCd  float64 // секунд до готовности рывка, 0 — готов
 	LastSeq uint32
 }
 
@@ -160,6 +167,12 @@ type Config struct {
 	SpeedMultiplier     float64 // множитель скорости от пикапа speed
 	SpeedDuration       float64 // секунды
 
+	// Рывок: импульс DashSpeed, линейно затухающий за DashDuration; повтор
+	// не раньше чем через DashCooldown. DashDuration ≤ 0 отключает рывок.
+	DashSpeed    float64 // единиц в секунду в начале рывка
+	DashDuration float64 // секунды
+	DashCooldown float64 // секунды
+
 	// Seed инициализирует генератор мира (точки респавна). Одинаковый seed
 	// и одинаковые вводы дают одинаковую симуляцию.
 	Seed uint64
@@ -194,6 +207,7 @@ func DefaultConfig() Config {
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
+		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 	}
 }
 
@@ -295,12 +309,12 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 			p.Angle = a
 		}
 		p.Fire = in.Fire
+		p.dashReq = in.Dash
 		p.LastSeq = in.Seq
 	}
 
 	for _, p := range w.players {
-		speed := w.cfg.PlayerSpeed * w.speedFactor(p)
-		p.Pos = w.move(p.Pos, Vec2{X: p.Move.X * speed * dt, Y: p.Move.Y * speed * dt})
+		p.Pos = w.move(p.Pos, w.displacement(p, dt))
 	}
 
 	// Порядок по ID — чтобы результат не зависел от порядка обхода map.
@@ -381,6 +395,7 @@ func (w *World) startRound() {
 		p.cooldown = 0
 		p.Heat = 0
 		p.speedLeft = 0
+		p.dashReq, p.dashLeft, p.dashCd = false, 0, 0
 	}
 }
 
@@ -651,6 +666,7 @@ func (w *World) Snapshot() Snapshot {
 			HP:      p.HP,
 			Score:   p.Score,
 			Boosted: p.speedLeft > timeEps,
+			DashCd:  p.dashCooldownLeft(),
 			LastSeq: p.LastSeq,
 		})
 	}

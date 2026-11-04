@@ -202,19 +202,20 @@ func (r *Room) handleLeave(id game.PlayerID) {
 }
 
 // bufferInput сохраняет самый свежий (по seq) ввод игрока до следующего тика.
-// Fire накапливается по OR за тик: иначе короткое нажатие, за которым в том же
-// тике пришёл ввод с Fire=false, потерялось бы.
+// Fire и Dash накапливаются по OR за тик: иначе короткое нажатие, за которым
+// в том же тике пришёл ввод без него, потерялось бы.
 func (r *Room) bufferInput(pi anet.PlayerInput) {
 	id := game.PlayerID(pi.PlayerID)
 	if _, ok := r.clients[id]; !ok {
 		return
 	}
-	fire := pi.Input.Fire
+	fire, dash := pi.Input.Fire, pi.Input.Dash
 	if prev, ok := r.pendingInputs[id]; ok {
 		if pi.Input.Seq <= prev.Seq {
 			return
 		}
 		fire = fire || prev.Fire
+		dash = dash || prev.Dash
 	}
 	r.pendingInputs[id] = game.Input{
 		Seq:   pi.Input.Seq,
@@ -222,6 +223,7 @@ func (r *Room) bufferInput(pi anet.PlayerInput) {
 		MoveY: pi.Input.MoveY,
 		Angle: pi.Input.Angle,
 		Fire:  fire,
+		Dash:  dash,
 	}
 }
 
@@ -289,6 +291,7 @@ func (r *Room) broadcast(s game.Snapshot) {
 			HP:      p.HP,
 			Score:   p.Score,
 			Boosted: p.Boosted,
+			DashCd:  p.DashCd,
 			LastSeq: p.LastSeq,
 		}
 	}

@@ -16,6 +16,7 @@ type Input struct {
 	MoveY float64 `json:"moveY"`
 	Angle float64 `json:"angle"` // направление взгляда, радианы
 	Fire  bool    `json:"fire"`  // огонь зажат
+	Dash  bool    `json:"dash"`  // рывок (срабатывает, если кулдаун готов)
 }
 
 // PlayerInput — Input, привязанный сервером к конкретному игроку.
@@ -61,6 +62,7 @@ type PlayerState struct {
 	HP      int     `json:"hp"`
 	Score   int     `json:"score"`
 	Boosted bool    `json:"boosted"` // действует ускорение от пикапа speed
+	DashCd  float64 `json:"dashCd"`  // секунд до готовности рывка, 0 — готов
 	LastSeq uint32  `json:"lastSeq"`
 }
 

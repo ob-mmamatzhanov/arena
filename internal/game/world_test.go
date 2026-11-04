@@ -16,6 +16,7 @@ func testConfig() Config {
 		// Спавн пикапов выключен (PickupInterval = 0), параметры — для тестов подбора.
 		MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
+		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 		Seed: 1,
 	}
 }

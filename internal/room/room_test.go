@@ -290,6 +290,17 @@ func TestBufferInputKeepsFireWithinTick(t *testing.T) {
 	}
 }
 
+func TestBufferInputKeepsDashWithinTick(t *testing.T) {
+	rm := New("unit", slog.New(slog.DiscardHandler))
+	rm.clients[1] = newFakeClient(1)
+
+	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 1, Dash: true}})
+	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 2, MoveY: 1}})
+	if in := rm.pendingInputs[1]; in.Seq != 2 || in.MoveY != 1 || !in.Dash {
+		t.Fatalf("pending = %+v, want seq 2, moveY 1, dash kept", in)
+	}
+}
+
 func TestSnapshotTicksIncrease(t *testing.T) {
 	rm, _ := startRoom(t)
 	c := newFakeClient(1024)
