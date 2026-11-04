@@ -15,18 +15,26 @@ type Vec2 struct {
 	X, Y float64
 }
 
-// Input — намерение игрока на тик. MoveX/MoveY — направление в [-1, 1].
+// StartHP — здоровье игрока при появлении в мире.
+const StartHP = 100
+
+// Input — намерение игрока на тик. MoveX/MoveY — направление в [-1, 1],
+// Angle — направление взгляда в радианах.
 type Input struct {
 	Seq   uint32
 	MoveX float64
 	MoveY float64
+	Angle float64
 }
 
 // Player — состояние игрока в мире.
 type Player struct {
 	ID      PlayerID
 	Pos     Vec2
-	Move    Vec2   // текущее (последнее принятое) направление движения
+	Move    Vec2    // текущее (последнее принятое) направление движения
+	Angle   float64 // направление взгляда из последнего принятого ввода
+	HP      int
+	Score   int
 	LastSeq uint32 // seq последнего применённого ввода — для client-side reconciliation
 }
 
@@ -34,6 +42,9 @@ type Player struct {
 type PlayerState struct {
 	ID      PlayerID
 	Pos     Vec2
+	Angle   float64
+	HP      int
+	Score   int
 	LastSeq uint32
 }
 
@@ -67,6 +78,10 @@ func NewWorld(cfg Config) *World {
 	return &World{cfg: cfg, players: make(map[PlayerID]*Player)}
 }
 
+// Config возвращает параметры мира. Room берёт отсюда размеры для Welcome,
+// чтобы клиент и сервер использовали один источник истины.
+func (w *World) Config() Config { return w.cfg }
+
 // Tick возвращает номер последнего выполненного тика.
 func (w *World) Tick() uint64 { return w.tick }
 
@@ -85,7 +100,7 @@ func (w *World) AddPlayer(id PlayerID) {
 	if _, ok := w.players[id]; ok {
 		return
 	}
-	w.players[id] = &Player{ID: id, Pos: w.spawnPoint(id)}
+	w.players[id] = &Player{ID: id, Pos: w.spawnPoint(id), HP: StartHP, Score: 0}
 }
 
 // RemovePlayer удаляет игрока. Идемпотентно.
@@ -106,13 +121,17 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 			continue
 		}
 		p.Move = sanitizeMove(in.MoveX, in.MoveY)
+		if a, ok := sanitizeAngle(in.Angle); ok {
+			p.Angle = a
+		}
 		p.LastSeq = in.Seq
 	}
 
-	r := w.cfg.PlayerRadius
 	for _, p := range w.players {
-		p.Pos.X = clamp(p.Pos.X+p.Move.X*w.cfg.PlayerSpeed*dt, r, w.cfg.Width-r)
-		p.Pos.Y = clamp(p.Pos.Y+p.Move.Y*w.cfg.PlayerSpeed*dt, r, w.cfg.Height-r)
+		p.Pos = w.clampToWorld(Vec2{
+			X: p.Pos.X + p.Move.X*w.cfg.PlayerSpeed*dt,
+			Y: p.Pos.Y + p.Move.Y*w.cfg.PlayerSpeed*dt,
+		})
 	}
 	w.tick++
 }
@@ -121,7 +140,14 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 func (w *World) Snapshot() Snapshot {
 	ps := make([]PlayerState, 0, len(w.players))
 	for _, p := range w.players {
-		ps = append(ps, PlayerState{ID: p.ID, Pos: p.Pos, LastSeq: p.LastSeq})
+		ps = append(ps, PlayerState{
+			ID:      p.ID,
+			Pos:     p.Pos,
+			Angle:   p.Angle,
+			HP:      p.HP,
+			Score:   p.Score,
+			LastSeq: p.LastSeq,
+		})
 	}
 	slices.SortFunc(ps, func(a, b PlayerState) int {
 		switch {
@@ -140,10 +166,31 @@ func (w *World) spawnPoint(id PlayerID) Vec2 {
 	const slots = 8
 	angle := 2 * math.Pi * float64(uint32(id)%slots) / slots
 	radius := math.Min(w.cfg.Width, w.cfg.Height) / 3
-	return Vec2{
+	return w.clampToWorld(Vec2{
 		X: w.cfg.Width/2 + radius*math.Cos(angle),
 		Y: w.cfg.Height/2 + radius*math.Sin(angle),
+	})
+}
+
+// clampToWorld держит позицию в [0, Width]×[0, Height] с отступом на радиус,
+// чтобы тело игрока не вылезало за край. Если радиус больше половины мира,
+// отступ урезается — иначе нижняя граница оказалась бы за верхней.
+func (w *World) clampToWorld(p Vec2) Vec2 {
+	rx := math.Min(w.cfg.PlayerRadius, w.cfg.Width/2)
+	ry := math.Min(w.cfg.PlayerRadius, w.cfg.Height/2)
+	return Vec2{
+		X: clamp(p.X, rx, w.cfg.Width-rx),
+		Y: clamp(p.Y, ry, w.cfg.Height-ry),
 	}
+}
+
+// sanitizeAngle нормализует угол в [-π, π]. NaN/Inf отвергаются (ok=false):
+// тогда игрок сохраняет прежний угол.
+func sanitizeAngle(a float64) (float64, bool) {
+	if math.IsNaN(a) || math.IsInf(a, 0) {
+		return 0, false
+	}
+	return math.Remainder(a, 2*math.Pi), true
 }
 
 // sanitizeMove отбрасывает NaN/Inf и нормализует вектор до длины не более 1,

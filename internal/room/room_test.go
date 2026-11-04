@@ -11,6 +11,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"arena/internal/game"
 	anet "arena/internal/net"
 )
 
@@ -156,7 +157,13 @@ func TestJoinSendsWelcomeAndAddsPlayerOnTick(t *testing.T) {
 	if w.PlayerID != id || w.Room != "test" || w.TickRate != TickRate {
 		t.Fatalf("welcome = %+v, want id=%d room=test tickRate=%d", w, id, TickRate)
 	}
-	c.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, id) })
+	if cfg := rm.world.Config(); w.Width != cfg.Width || w.Height != cfg.Height {
+		t.Fatalf("welcome size = %vx%v, want world size %vx%v", w.Width, w.Height, cfg.Width, cfg.Height)
+	}
+	c.snapshotUntil(t, func(s anet.Snapshot) bool {
+		p, ok := findPlayer(s, id)
+		return ok && p.HP == game.StartHP
+	})
 }
 
 func TestJoinRejectsWhenFull(t *testing.T) {

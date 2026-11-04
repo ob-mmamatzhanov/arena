@@ -14,6 +14,7 @@ type Input struct {
 	Seq   uint32  `json:"seq"`
 	MoveX float64 `json:"moveX"`
 	MoveY float64 `json:"moveY"`
+	Angle float64 `json:"angle"` // направление взгляда, радианы
 }
 
 // PlayerInput — Input, привязанный сервером к конкретному игроку.
@@ -29,6 +30,9 @@ type Welcome struct {
 	PlayerID uint32 `json:"playerId"`
 	Room     string `json:"room"`
 	TickRate int    `json:"tickRate"`
+	// Размеры мира — те же, что использует серверная симуляция.
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 // PlayerState — состояние одного игрока в снапшоте.
@@ -36,6 +40,9 @@ type PlayerState struct {
 	ID      uint32  `json:"id"`
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
+	Angle   float64 `json:"angle"`
+	HP      int     `json:"hp"`
+	Score   int     `json:"score"`
 	LastSeq uint32  `json:"lastSeq"`
 }
 

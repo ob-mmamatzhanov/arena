@@ -163,11 +163,14 @@ func (r *Room) handleJoin(req joinReq) {
 	r.clients[id] = req.conn
 	r.pendingJoins = append(r.pendingJoins, id)
 
+	cfg := r.world.Config()
 	welcome, err := json.Marshal(anet.Welcome{
 		Type:     anet.TypeWelcome,
 		PlayerID: uint32(id),
 		Room:     r.name,
 		TickRate: TickRate,
+		Width:    cfg.Width,
+		Height:   cfg.Height,
 	})
 	if err == nil && !req.conn.TrySend(welcome) {
 		err = anet.ErrClosed
@@ -202,6 +205,7 @@ func (r *Room) bufferInput(pi anet.PlayerInput) {
 		Seq:   pi.Input.Seq,
 		MoveX: pi.Input.MoveX,
 		MoveY: pi.Input.MoveY,
+		Angle: pi.Input.Angle,
 	}
 }
 
@@ -235,7 +239,15 @@ func (r *Room) broadcast(s game.Snapshot) {
 		Players: make([]anet.PlayerState, len(s.Players)),
 	}
 	for i, p := range s.Players {
-		msg.Players[i] = anet.PlayerState{ID: uint32(p.ID), X: p.Pos.X, Y: p.Pos.Y, LastSeq: p.LastSeq}
+		msg.Players[i] = anet.PlayerState{
+			ID:      uint32(p.ID),
+			X:       p.Pos.X,
+			Y:       p.Pos.Y,
+			Angle:   p.Angle,
+			HP:      p.HP,
+			Score:   p.Score,
+			LastSeq: p.LastSeq,
+		}
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
