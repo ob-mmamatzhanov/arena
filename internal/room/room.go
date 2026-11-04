@@ -166,6 +166,10 @@ func (r *Room) handleJoin(req joinReq) {
 	r.pendingJoins = append(r.pendingJoins, id)
 
 	cfg := r.world.Config()
+	obstacles := make([]anet.Obstacle, len(cfg.Obstacles))
+	for i, o := range cfg.Obstacles {
+		obstacles[i] = anet.Obstacle{X: o.X, Y: o.Y, W: o.W, H: o.H}
+	}
 	welcome, err := json.Marshal(anet.Welcome{
 		Type:         anet.TypeWelcome,
 		PlayerID:     uint32(id),
@@ -175,6 +179,7 @@ func (r *Room) handleJoin(req joinReq) {
 		Height:       cfg.Height,
 		PlayerSpeed:  cfg.PlayerSpeed,
 		PlayerRadius: cfg.PlayerRadius,
+		Obstacles:    obstacles,
 	})
 	if err == nil && !req.conn.TrySend(welcome) {
 		err = anet.ErrClosed

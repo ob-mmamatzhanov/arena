@@ -8,12 +8,28 @@ import (
 // BenchmarkUpdate8Players100Bullets — один тик мира с 8 игроками (все держат огонь)
 // и 100 летящими пулями. Перед каждой итерацией пули восстанавливаются из шаблона
 // копированием (без аллокаций), чтобы их число не уплывало из-за попаданий/вылетов.
+// Варианты obstacles=0 и obstacles=6 показывают цену коллизий с картой в одной сборке.
 func BenchmarkUpdate8Players100Bullets(b *testing.B) {
-	w := NewWorld(DefaultConfig())
+	for _, bc := range []struct {
+		name      string
+		obstacles []Obstacle
+	}{
+		{"obstacles=0", nil},
+		{"obstacles=6", DefaultObstacles()},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			cfg := DefaultConfig()
+			cfg.Obstacles = bc.obstacles
+			benchUpdate(b, cfg)
+		})
+	}
+}
+
+func benchUpdate(b *testing.B, cfg Config) {
+	w := NewWorld(cfg)
 	for id := PlayerID(1); id <= 8; id++ {
 		w.AddPlayer(id)
 	}
-	cfg := w.Config()
 
 	template := make([]Bullet, 100)
 	for i := range template {
@@ -33,7 +49,9 @@ func BenchmarkUpdate8Players100Bullets(b *testing.B) {
 	for i := 0; b.Loop(); i++ {
 		w.bullets = append(w.bullets[:0], template...)
 		for id := PlayerID(1); id <= 8; id++ {
-			inputs[id] = Input{Seq: uint32(i + 1), MoveX: 1, Angle: float64(id), Fire: true}
+			// Направление меняется, чтобы игроки не залипали в одном углу.
+			a := float64(i/40) + float64(id)
+			inputs[id] = Input{Seq: uint32(i + 1), MoveX: math.Cos(a), MoveY: math.Sin(a), Angle: float64(id), Fire: true}
 		}
 		w.Update(1.0/20, inputs)
 	}

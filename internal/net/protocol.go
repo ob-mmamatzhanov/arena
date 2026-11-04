@@ -38,6 +38,17 @@ type Welcome struct {
 	// чтобы его симуляция совпадала с серверной.
 	PlayerSpeed  float64 `json:"speed"` // единиц в секунду
 	PlayerRadius float64 `json:"radius"`
+	// Obstacles статичны, поэтому отдаются один раз здесь и не дублируются
+	// в снапшотах. Всегда массив (не null).
+	Obstacles []Obstacle `json:"obstacles"`
+}
+
+// Obstacle — препятствие карты: левый верхний угол (x, y), ширина w, высота h.
+type Obstacle struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
 }
 
 // PlayerState — состояние одного игрока в снапшоте.
