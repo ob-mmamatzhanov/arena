@@ -15,6 +15,7 @@ type Input struct {
 	MoveX float64 `json:"moveX"`
 	MoveY float64 `json:"moveY"`
 	Angle float64 `json:"angle"` // направление взгляда, радианы
+	Fire  bool    `json:"fire"`  // огонь зажат
 }
 
 // PlayerInput — Input, привязанный сервером к конкретному игроку.
@@ -50,9 +51,32 @@ type PlayerState struct {
 	LastSeq uint32  `json:"lastSeq"`
 }
 
+// BulletState — летящая пуля. Скорость передаётся, чтобы клиент мог
+// плавно экстраполировать позицию между снапшотами.
+type BulletState struct {
+	ID    uint32  `json:"id"`
+	Owner uint32  `json:"owner"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	VX    float64 `json:"vx"`
+	VY    float64 `json:"vy"`
+}
+
+// Hit — попадание, случившееся в тике этого снапшота.
+type Hit struct {
+	Target  uint32  `json:"target"`
+	Shooter uint32  `json:"shooter"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Killed  bool    `json:"killed"`
+}
+
 // Snapshot — состояние мира, рассылаемое всем клиентам каждый тик.
+// Bullets и Hits всегда сериализуются массивами (не null).
 type Snapshot struct {
 	Type    string        `json:"type"`
 	Tick    uint64        `json:"tick"`
 	Players []PlayerState `json:"players"`
+	Bullets []BulletState `json:"bullets"`
+	Hits    []Hit         `json:"hits"`
 }

@@ -195,19 +195,26 @@ func (r *Room) handleLeave(id game.PlayerID) {
 }
 
 // bufferInput сохраняет самый свежий (по seq) ввод игрока до следующего тика.
+// Fire накапливается по OR за тик: иначе короткое нажатие, за которым в том же
+// тике пришёл ввод с Fire=false, потерялось бы.
 func (r *Room) bufferInput(pi anet.PlayerInput) {
 	id := game.PlayerID(pi.PlayerID)
 	if _, ok := r.clients[id]; !ok {
 		return
 	}
-	if prev, ok := r.pendingInputs[id]; ok && pi.Input.Seq <= prev.Seq {
-		return
+	fire := pi.Input.Fire
+	if prev, ok := r.pendingInputs[id]; ok {
+		if pi.Input.Seq <= prev.Seq {
+			return
+		}
+		fire = fire || prev.Fire
 	}
 	r.pendingInputs[id] = game.Input{
 		Seq:   pi.Input.Seq,
 		MoveX: pi.Input.MoveX,
 		MoveY: pi.Input.MoveY,
 		Angle: pi.Input.Angle,
+		Fire:  fire,
 	}
 }
 
@@ -239,6 +246,27 @@ func (r *Room) broadcast(s game.Snapshot) {
 		Type:    anet.TypeSnapshot,
 		Tick:    s.Tick,
 		Players: make([]anet.PlayerState, len(s.Players)),
+		Bullets: make([]anet.BulletState, len(s.Bullets)),
+		Hits:    make([]anet.Hit, len(s.Hits)),
+	}
+	for i, b := range s.Bullets {
+		msg.Bullets[i] = anet.BulletState{
+			ID:    uint32(b.ID),
+			Owner: uint32(b.Owner),
+			X:     b.Pos.X,
+			Y:     b.Pos.Y,
+			VX:    b.Vel.X,
+			VY:    b.Vel.Y,
+		}
+	}
+	for i, h := range s.Hits {
+		msg.Hits[i] = anet.Hit{
+			Target:  uint32(h.Target),
+			Shooter: uint32(h.Shooter),
+			X:       h.Pos.X,
+			Y:       h.Pos.Y,
+			Killed:  h.Killed,
+		}
 	}
 	for i, p := range s.Players {
 		msg.Players[i] = anet.PlayerState{

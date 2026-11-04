@@ -2,13 +2,17 @@ package game
 
 import (
 	"math"
+	"slices"
 	"testing"
 )
 
 const eps = 1e-9
 
 func testConfig() Config {
-	return Config{Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10}
+	return Config{
+		Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10,
+		BulletSpeed: 500, BulletRadius: 2, BulletLifetime: 1, FireCooldown: 0.2, BulletDamage: 25,
+	}
 }
 
 func newWorldWith(t *testing.T, ids ...PlayerID) *World {
@@ -214,9 +218,9 @@ func TestUpdateDeterministic(t *testing.T) {
 		w := newWorldWith(t, 1, 2, 3)
 		for i := uint32(1); i <= 50; i++ {
 			w.Update(0.05, map[PlayerID]Input{
-				1: {Seq: i, MoveX: 1, MoveY: 0.3},
-				2: {Seq: i, MoveX: -0.7, MoveY: float64(i%3) - 1},
-				3: {Seq: i, MoveY: 1},
+				1: {Seq: i, MoveX: 1, MoveY: 0.3, Angle: float64(i) * 0.1, Fire: true},
+				2: {Seq: i, MoveX: -0.7, MoveY: float64(i%3) - 1, Angle: -float64(i) * 0.2, Fire: i%3 == 0},
+				3: {Seq: i, MoveY: 1, Angle: 2, Fire: true},
 			})
 		}
 		return w.Snapshot()
@@ -224,6 +228,9 @@ func TestUpdateDeterministic(t *testing.T) {
 	a, b := run(), run()
 	if len(a.Players) != len(b.Players) || a.Tick != b.Tick {
 		t.Fatal("runs diverged")
+	}
+	if !slices.Equal(a.Bullets, b.Bullets) || !slices.Equal(a.Hits, b.Hits) {
+		t.Fatalf("bullets/hits diverged: %+v vs %+v", a.Bullets, b.Bullets)
 	}
 	for i := range a.Players {
 		if a.Players[i] != b.Players[i] {
