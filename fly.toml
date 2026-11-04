@@ -5,7 +5,7 @@ primary_region = "ams"
   dockerfile = "Dockerfile"
 
 [processes]
-  app = "-addr :8080 -origins localhost:*,127.0.0.1:*"
+  app = "/arena -addr :8080 -origins localhost:*,127.0.0.1:*,arena-client.mmamatzhanov.workers.dev"
 
 [http_service]
   internal_port = 8080
