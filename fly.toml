@@ -4,6 +4,9 @@ primary_region = "ams"
 [build]
   dockerfile = "Dockerfile"
 
+[processes]
+  app = "-addr :8080 -origins localhost:*,127.0.0.1:*"
+
 [http_service]
   internal_port = 8080
   force_https = true
