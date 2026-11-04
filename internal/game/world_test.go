@@ -2,13 +2,17 @@ package game
 
 import (
 	"math"
+	"slices"
 	"testing"
 )
 
 const eps = 1e-9
 
 func testConfig() Config {
-	return Config{Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10}
+	return Config{
+		Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10,
+		BulletSpeed: 500, BulletRadius: 2, BulletLifetime: 1, FireCooldown: 0.2, BulletDamage: 25,
+	}
 }
 
 func newWorldWith(t *testing.T, ids ...PlayerID) *World {
@@ -155,8 +159,8 @@ func TestUpdateClampsToArena(t *testing.T) {
 
 func TestUpdateSanitizesInput(t *testing.T) {
 	tests := []struct {
-		name         string
-		in           Input
+		name           string
+		in             Input
 		wantDX, wantDY float64 // смещение за dt=1 при speed=100
 	}{
 		{"oversized vector is normalized", Input{Seq: 1, MoveX: 1000}, 100, 0},
@@ -214,9 +218,9 @@ func TestUpdateDeterministic(t *testing.T) {
 		w := newWorldWith(t, 1, 2, 3)
 		for i := uint32(1); i <= 50; i++ {
 			w.Update(0.05, map[PlayerID]Input{
-				1: {Seq: i, MoveX: 1, MoveY: 0.3},
-				2: {Seq: i, MoveX: -0.7, MoveY: float64(i%3) - 1},
-				3: {Seq: i, MoveY: 1},
+				1: {Seq: i, MoveX: 1, MoveY: 0.3, Angle: float64(i) * 0.1, Fire: true},
+				2: {Seq: i, MoveX: -0.7, MoveY: float64(i%3) - 1, Angle: -float64(i) * 0.2, Fire: i%3 == 0},
+				3: {Seq: i, MoveY: 1, Angle: 2, Fire: true},
 			})
 		}
 		return w.Snapshot()
@@ -225,9 +229,73 @@ func TestUpdateDeterministic(t *testing.T) {
 	if len(a.Players) != len(b.Players) || a.Tick != b.Tick {
 		t.Fatal("runs diverged")
 	}
+	if !slices.Equal(a.Bullets, b.Bullets) || !slices.Equal(a.Hits, b.Hits) {
+		t.Fatalf("bullets/hits diverged: %+v vs %+v", a.Bullets, b.Bullets)
+	}
 	for i := range a.Players {
 		if a.Players[i] != b.Players[i] {
 			t.Fatalf("runs diverged at %d: %+v vs %+v", i, a.Players[i], b.Players[i])
 		}
+	}
+}
+
+func TestNewPlayerHasStartHPAndZeroScore(t *testing.T) {
+	w := newWorldWith(t, 1)
+	got := playerState(t, w, 1)
+	if got.HP != 100 || got.Score != 0 {
+		t.Fatalf("new player hp=%d score=%d, want hp=100 score=0", got.HP, got.Score)
+	}
+}
+
+func TestPlayerStaysInsideWorld(t *testing.T) {
+	dirs := []struct{ x, y float64 }{
+		{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1},
+	}
+	// Включая неквадратный мир 800×600: спавн и движение не должны выходить за его края.
+	for _, cfg := range []Config{
+		testConfig(),
+		{Width: 800, Height: 600, PlayerSpeed: 200, PlayerRadius: 16},
+	} {
+		for _, d := range dirs {
+			w := NewWorld(cfg)
+			for id := PlayerID(1); id <= 8; id++ {
+				w.AddPlayer(id)
+			}
+			inputs := map[PlayerID]Input{}
+			for i := uint32(1); i <= 200; i++ {
+				for id := PlayerID(1); id <= 8; id++ {
+					inputs[id] = Input{Seq: i, MoveX: d.x, MoveY: d.y}
+				}
+				w.Update(0.05, inputs)
+				for _, p := range w.Snapshot().Players {
+					if p.Pos.X < 0 || p.Pos.X > cfg.Width || p.Pos.Y < 0 || p.Pos.Y > cfg.Height {
+						t.Fatalf("world %vx%v dir %v: player %d out of bounds at %v",
+							cfg.Width, cfg.Height, d, p.ID, p.Pos)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestAngleFromInputInSnapshot(t *testing.T) {
+	w := newWorldWith(t, 1)
+	w.Update(0.05, map[PlayerID]Input{1: {Seq: 1, Angle: 1.25}})
+	if got := playerState(t, w, 1).Angle; !approx(got, 1.25) {
+		t.Fatalf("angle = %v, want 1.25", got)
+	}
+
+	// Без нового ввода и при устаревшем seq угол сохраняется.
+	w.Update(0.05, nil)
+	w.Update(0.05, map[PlayerID]Input{1: {Seq: 1, Angle: -2}})
+	if got := playerState(t, w, 1).Angle; !approx(got, 1.25) {
+		t.Fatalf("angle = %v after stale/no input, want 1.25", got)
+	}
+
+	// Свежий ввод перезаписывает угол; NaN игнорируется.
+	w.Update(0.05, map[PlayerID]Input{1: {Seq: 2, Angle: -2}})
+	w.Update(0.05, map[PlayerID]Input{1: {Seq: 3, Angle: math.NaN()}})
+	if got := playerState(t, w, 1).Angle; !approx(got, -2) {
+		t.Fatalf("angle = %v, want -2", got)
 	}
 }

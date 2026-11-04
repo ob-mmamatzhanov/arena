@@ -14,6 +14,8 @@ type Input struct {
 	Seq   uint32  `json:"seq"`
 	MoveX float64 `json:"moveX"`
 	MoveY float64 `json:"moveY"`
+	Angle float64 `json:"angle"` // направление взгляда, радианы
+	Fire  bool    `json:"fire"`  // огонь зажат
 }
 
 // PlayerInput — Input, привязанный сервером к конкретному игроку.
@@ -29,6 +31,13 @@ type Welcome struct {
 	PlayerID uint32 `json:"playerId"`
 	Room     string `json:"room"`
 	TickRate int    `json:"tickRate"`
+	// Размеры мира — те же, что использует серверная симуляция.
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+	// Параметры движения — нужны клиенту для client-side prediction,
+	// чтобы его симуляция совпадала с серверной.
+	PlayerSpeed  float64 `json:"speed"` // единиц в секунду
+	PlayerRadius float64 `json:"radius"`
 }
 
 // PlayerState — состояние одного игрока в снапшоте.
@@ -36,12 +45,38 @@ type PlayerState struct {
 	ID      uint32  `json:"id"`
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
+	Angle   float64 `json:"angle"`
+	HP      int     `json:"hp"`
+	Score   int     `json:"score"`
 	LastSeq uint32  `json:"lastSeq"`
 }
 
+// BulletState — летящая пуля. Скорость передаётся, чтобы клиент мог
+// плавно экстраполировать позицию между снапшотами.
+type BulletState struct {
+	ID    uint32  `json:"id"`
+	Owner uint32  `json:"owner"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	VX    float64 `json:"vx"`
+	VY    float64 `json:"vy"`
+}
+
+// Hit — попадание, случившееся в тике этого снапшота.
+type Hit struct {
+	Target  uint32  `json:"target"`
+	Shooter uint32  `json:"shooter"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Killed  bool    `json:"killed"`
+}
+
 // Snapshot — состояние мира, рассылаемое всем клиентам каждый тик.
+// Bullets и Hits всегда сериализуются массивами (не null).
 type Snapshot struct {
 	Type    string        `json:"type"`
 	Tick    uint64        `json:"tick"`
 	Players []PlayerState `json:"players"`
+	Bullets []BulletState `json:"bullets"`
+	Hits    []Hit         `json:"hits"`
 }

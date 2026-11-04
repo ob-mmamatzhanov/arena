@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"sync"
 	"testing"
 	"time"
 
 	"nhooyr.io/websocket"
 
+	"arena/internal/game"
 	anet "arena/internal/net"
 )
 
@@ -156,7 +158,16 @@ func TestJoinSendsWelcomeAndAddsPlayerOnTick(t *testing.T) {
 	if w.PlayerID != id || w.Room != "test" || w.TickRate != TickRate {
 		t.Fatalf("welcome = %+v, want id=%d room=test tickRate=%d", w, id, TickRate)
 	}
-	c.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, id) })
+	if cfg := rm.world.Config(); w.Width != cfg.Width || w.Height != cfg.Height {
+		t.Fatalf("welcome size = %vx%v, want world size %vx%v", w.Width, w.Height, cfg.Width, cfg.Height)
+	}
+	if cfg := rm.world.Config(); w.PlayerSpeed != cfg.PlayerSpeed || w.PlayerRadius != cfg.PlayerRadius {
+		t.Fatalf("welcome speed/radius = %v/%v, want %v/%v", w.PlayerSpeed, w.PlayerRadius, cfg.PlayerSpeed, cfg.PlayerRadius)
+	}
+	c.snapshotUntil(t, func(s anet.Snapshot) bool {
+		p, ok := findPlayer(s, id)
+		return ok && p.HP == game.StartHP
+	})
 }
 
 func TestJoinRejectsWhenFull(t *testing.T) {
@@ -218,6 +229,55 @@ func TestInputsAppliedInTick(t *testing.T) {
 	s := c.snapshotUntil(t, func(s anet.Snapshot) bool { return s.Tick > got.Tick })
 	if hasPlayer(s, 999) || len(s.Players) != 1 {
 		t.Fatalf("unexpected players: %+v", s.Players)
+	}
+}
+
+func TestFireProducesBulletsAndHits(t *testing.T) {
+	rm, _ := startRoom(t)
+	ca, cb := newFakeClient(1024), newFakeClient(1024)
+	a, b := join(t, rm, ca), join(t, rm, cb)
+	s := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, a) && hasPlayer(s, b) })
+	pa, _ := findPlayer(s, a)
+	pb, _ := findPlayer(s, b)
+
+	// a целится в стоящего b и зажимает огонь.
+	angle := math.Atan2(pb.Y-pa.Y, pb.X-pa.X)
+	rm.PushInput(anet.PlayerInput{PlayerID: a, Input: anet.Input{Seq: 1, Angle: angle, Fire: true}})
+
+	got := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return len(s.Bullets) > 0 })
+	bl := got.Bullets[0]
+	if bl.Owner != a || bl.ID == 0 || math.Hypot(bl.VX, bl.VY) == 0 {
+		t.Fatalf("bullet = %+v, want moving bullet owned by %d", bl, a)
+	}
+
+	hit := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return len(s.Hits) > 0 })
+	h := hit.Hits[0]
+	if h.Target != b || h.Shooter != a {
+		t.Fatalf("hit = %+v, want %d -> %d", h, a, b)
+	}
+	if p, _ := findPlayer(hit, b); p.HP >= game.StartHP {
+		t.Fatalf("target hp = %d, want < %d", p.HP, game.StartHP)
+	}
+}
+
+// Короткое нажатие огня не должно теряться, если за тик пришло несколько вводов
+// и последний уже с Fire=false.
+func TestBufferInputKeepsFireWithinTick(t *testing.T) {
+	rm := New("unit", slog.New(slog.DiscardHandler))
+	rm.clients[1] = newFakeClient(1)
+
+	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 1, Fire: true}})
+	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 2, MoveX: 1}})
+	if in := rm.pendingInputs[1]; in.Seq != 2 || in.MoveX != 1 || !in.Fire {
+		t.Fatalf("pending = %+v, want seq 2, moveX 1, fire kept", in)
+	}
+
+	// Устаревший ввод не меняет ничего, в том числе Fire.
+	clear(rm.pendingInputs)
+	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 5}})
+	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 4, Fire: true}})
+	if in := rm.pendingInputs[1]; in.Seq != 5 || in.Fire {
+		t.Fatalf("pending = %+v, stale input must be ignored", in)
 	}
 }
 
