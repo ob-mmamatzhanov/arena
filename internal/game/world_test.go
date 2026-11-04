@@ -235,7 +235,7 @@ func TestUpdateDeterministic(t *testing.T) {
 	if len(a.Players) != len(b.Players) || a.Tick != b.Tick {
 		t.Fatal("runs diverged")
 	}
-	if !slices.Equal(a.Bullets, b.Bullets) || !slices.Equal(a.Hits, b.Hits) {
+	if !slices.Equal(a.Bullets, b.Bullets) || !slices.Equal(a.Events, b.Events) {
 		t.Fatalf("bullets/hits diverged: %+v vs %+v", a.Bullets, b.Bullets)
 	}
 	for i := range a.Players {

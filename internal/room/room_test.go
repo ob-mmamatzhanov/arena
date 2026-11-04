@@ -259,9 +259,17 @@ func TestFireProducesBulletsAndHits(t *testing.T) {
 		t.Fatalf("bullet = %+v, want moving bullet owned by %d", bl, a)
 	}
 
-	hit := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return len(s.Hits) > 0 })
-	h := hit.Hits[0]
-	if h.Target != b || h.Shooter != a {
+	var h anet.Event
+	hit := ca.snapshotUntil(t, func(s anet.Snapshot) bool {
+		for _, e := range s.Events {
+			if e.Type == anet.EventHit {
+				h = e
+				return true
+			}
+		}
+		return false
+	})
+	if h.TargetID != b || h.ShooterID != a {
 		t.Fatalf("hit = %+v, want %d -> %d", h, a, b)
 	}
 	if p, _ := findPlayer(hit, b); p.HP >= game.StartHP {
@@ -463,5 +471,41 @@ func TestSnapshotPickupsAndBoostedJSON(t *testing.T) {
 	}
 	if string(empty.Pickups) != "[]" {
 		t.Fatalf("empty pickups = %s, want []", empty.Pickups)
+	}
+}
+
+// Событие приходит клиенту ровно в одном снапшоте: мир сбрасывает события
+// в начале каждого тика, а комната рассылает снапшот после каждого тика.
+// Сколько выстрелов успеет случиться до отпускания огня, зависит от
+// планировщика, поэтому проверяется точное соответствие: одно событие shot
+// на каждую пулю (пуля видна уже в снапшоте тика своего выстрела).
+func TestShotEventDeliveredOncePerShot(t *testing.T) {
+	rm, _ := startRoom(t)
+	c := newFakeClient(1024)
+	id := join(t, rm, c)
+	c.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, id) })
+
+	shots, bullets := 0, map[uint32]bool{}
+	record := func(s anet.Snapshot) {
+		for _, e := range s.Events {
+			if e.Type == anet.EventShot && e.PlayerID == id {
+				shots++
+			}
+		}
+		for _, b := range s.Bullets {
+			if b.Owner == id {
+				bullets[b.ID] = true
+			}
+		}
+	}
+
+	rm.PushInput(anet.PlayerInput{PlayerID: id, Input: anet.Input{Seq: 1, Fire: true}})
+	record(c.snapshotUntil(t, func(s anet.Snapshot) bool { return len(s.Events) > 0 }))
+	rm.PushInput(anet.PlayerInput{PlayerID: id, Input: anet.Input{Seq: 2}}) // огонь отпущен
+	n := 0
+	c.snapshotUntil(t, func(s anet.Snapshot) bool { record(s); n++; return n == 10 })
+
+	if shots == 0 || shots != len(bullets) {
+		t.Fatalf("shot events = %d, distinct bullets = %d; want one event per shot", shots, len(bullets))
 	}
 }

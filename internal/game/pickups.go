@@ -72,6 +72,7 @@ func (w *World) applyPickup(p *Player, pk Pickup) {
 	case PickupSpeed:
 		p.speedLeft = w.cfg.SpeedDuration
 	}
+	w.emit(Event{Type: EventPickup, Player: p.ID, Pickup: pk.Type})
 }
 
 // spawnPickups раз в PickupInterval кладёт пикап случайного типа, если на карте

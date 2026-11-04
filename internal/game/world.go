@@ -84,15 +84,6 @@ type BulletState struct {
 	Vel   Vec2
 }
 
-// Hit — событие попадания за тик. Нужно клиенту, чтобы показать попадание:
-// пуля исчезает в том же тике и в снапшот уже не попадает.
-type Hit struct {
-	Target  PlayerID
-	Shooter PlayerID
-	Pos     Vec2 // точка попадания
-	Killed  bool // цель погибла и возродилась
-}
-
 // Phase — фаза раунда.
 type Phase string
 
@@ -118,12 +109,12 @@ type RoundState struct {
 }
 
 // Snapshot — полное состояние мира на конкретный тик.
-// Hits содержит только попадания, случившиеся в этом тике.
+// Events содержит только события, случившиеся в этом тике.
 type Snapshot struct {
 	Tick    uint64
 	Players []PlayerState
 	Bullets []BulletState
-	Hits    []Hit
+	Events  []Event
 	Pickups []Pickup // по возрастанию ID
 	Round   RoundState
 }
@@ -222,7 +213,7 @@ type World struct {
 	players    map[PlayerID]*Player
 	bullets    []Bullet
 	nextBullet BulletID
-	hits       []Hit      // попадания последнего тика
+	events     []Event    // события последнего тика
 	ids        []PlayerID // переиспользуемый буфер отсортированных ID
 	rng        *rand.Rand // единственный источник случайности мира
 
@@ -289,7 +280,7 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	if dt <= 0 || math.IsNaN(dt) || math.IsInf(dt, 0) {
 		return
 	}
-	w.hits = w.hits[:0]
+	w.events = w.events[:0] // события предыдущего тика уже ушли в его снапшот
 	if w.phase == PhaseIntermission {
 		w.timeLeft = max(w.timeLeft-dt, 0)
 		if w.timeLeft <= timeEps {
@@ -383,7 +374,6 @@ func (w *World) startRound() {
 	w.winner = 0
 	clear(w.bullets)
 	w.bullets = w.bullets[:0]
-	w.hits = w.hits[:0]
 	w.resetPickups()
 	for _, id := range w.sortedIDs() { // порядок по ID — детерминированный rng
 		p := w.players[id]
@@ -553,14 +543,23 @@ func (w *World) updateBullets(dt float64, ids []PlayerID) {
 
 		target, at, tHit, hit := w.firstHit(b.Owner, from, to, ids)
 		if tWall, wall := w.firstObstacleT(from, to); wall && (!hit || tWall < tHit) {
-			continue // пуля разбилась о препятствие
+			// Пуля разбилась о препятствие; Pos — центр пули в момент касания.
+			w.emit(Event{Type: EventBulletHit, Pos: Vec2{
+				X: from.X + (to.X-from.X)*tWall,
+				Y: from.Y + (to.Y-from.Y)*tWall,
+			}})
+			continue
 		}
 		if hit {
 			w.applyHit(b.Owner, target, at)
 			continue
 		}
-		if b.ttl <= timeEps || to.X < 0 || to.X > w.cfg.Width || to.Y < 0 || to.Y > w.cfg.Height {
+		if to.X < 0 || to.X > w.cfg.Width || to.Y < 0 || to.Y > w.cfg.Height {
+			w.emit(Event{Type: EventBulletHit, Pos: w.exitPoint(from, to)}) // ударилась о границу
 			continue
+		}
+		if b.ttl <= timeEps {
+			continue // истекла в полёте — без события
 		}
 		b.Pos = to
 		alive = append(alive, b)
@@ -603,15 +602,15 @@ func (w *World) firstHit(owner PlayerID, from, to Vec2, ids []PlayerID) (*Player
 // в случайной точке, стрелок (если ещё в мире) получает очко.
 func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
 	target.HP -= w.cfg.BulletDamage
-	killed := target.HP <= 0
-	if killed {
+	w.emit(Event{Type: EventHit, Pos: at, Target: target.ID, Shooter: shooter})
+	if target.HP <= 0 {
 		if s, ok := w.players[shooter]; ok {
 			s.Score++
 		}
 		target.HP = StartHP
 		target.Pos = w.respawnPoint(target.ID)
+		w.emit(Event{Type: EventKill, Target: target.ID, Shooter: shooter})
 	}
-	w.hits = append(w.hits, Hit{Target: target.ID, Shooter: shooter, Pos: at, Killed: killed})
 }
 
 // fire создаёт пули для игроков с зажатым огнём и истёкшим кулдауном.
@@ -639,6 +638,7 @@ func (w *World) fire(dt float64, ids []PlayerID) {
 			Vel:   Vec2{X: dir.X * w.cfg.BulletSpeed, Y: dir.Y * w.cfg.BulletSpeed},
 			ttl:   w.cfg.BulletLifetime,
 		})
+		w.emit(Event{Type: EventShot, Player: id, Pos: p.Pos})
 		p.cooldown = w.cfg.FireCooldown
 	}
 }
@@ -695,7 +695,7 @@ func (w *World) Snapshot() Snapshot {
 		Tick:    w.tick,
 		Players: ps,
 		Bullets: bs,
-		Hits:    slices.Clone(w.hits),
+		Events:  slices.Clone(w.events),
 		Pickups: slices.Clone(w.pickups), // ID растут при добавлении, порядок сохраняется
 		Round:   round,
 	}

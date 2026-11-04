@@ -256,8 +256,21 @@ func (r *Room) broadcast(s game.Snapshot) {
 		Tick:    s.Tick,
 		Players: make([]anet.PlayerState, len(s.Players)),
 		Bullets: make([]anet.BulletState, len(s.Bullets)),
-		Hits:    make([]anet.Hit, len(s.Hits)),
 		Pickups: make([]anet.Pickup, len(s.Pickups)),
+	}
+	if len(s.Events) > 0 { // nil → поле events опускается (omitempty)
+		msg.Events = make([]anet.Event, len(s.Events))
+		for i, e := range s.Events {
+			msg.Events[i] = anet.Event{
+				Type:       string(e.Type),
+				X:          e.Pos.X,
+				Y:          e.Pos.Y,
+				TargetID:   uint32(e.Target),
+				ShooterID:  uint32(e.Shooter),
+				PlayerID:   uint32(e.Player),
+				PickupType: string(e.Pickup),
+			}
+		}
 	}
 	for i, pk := range s.Pickups {
 		msg.Pickups[i] = anet.Pickup{ID: uint32(pk.ID), Type: string(pk.Type), X: pk.Pos.X, Y: pk.Pos.Y}
@@ -270,15 +283,6 @@ func (r *Room) broadcast(s game.Snapshot) {
 			Y:     b.Pos.Y,
 			VX:    b.Vel.X,
 			VY:    b.Vel.Y,
-		}
-	}
-	for i, h := range s.Hits {
-		msg.Hits[i] = anet.Hit{
-			Target:  uint32(h.Target),
-			Shooter: uint32(h.Shooter),
-			X:       h.Pos.X,
-			Y:       h.Pos.Y,
-			Killed:  h.Killed,
 		}
 	}
 	for i, p := range s.Players {
