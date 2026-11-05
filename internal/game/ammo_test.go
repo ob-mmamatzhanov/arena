@@ -100,9 +100,8 @@ func TestPickupTypeForBoundaries(t *testing.T) {
 		roll int
 		want PickupType
 	}{
-		{0, PickupAmmo}, {49, PickupAmmo},
-		{50, PickupHealth}, {79, PickupHealth},
-		{80, PickupSpeed}, {99, PickupSpeed},
+		{0, PickupHealth}, {59, PickupHealth},
+		{60, PickupSpeed}, {99, PickupSpeed},
 	}
 	for _, tt := range tests {
 		if got := pickupTypeFor(tt.roll); got != tt.want {
@@ -119,7 +118,7 @@ func TestPickupTypeForBoundaries(t *testing.T) {
 }
 
 // При фиксированном seed выбор воспроизводим и совпадает с ручным броском
-// того же генератора, а частоты близки к 50/30/20.
+// того же генератора, а частоты близки к 60/40; ammo в общий поток не попадает.
 func TestPickupTypeWeightedByDeterministicRand(t *testing.T) {
 	const n = 20000
 	cfg := testConfig()
@@ -135,7 +134,7 @@ func TestPickupTypeWeightedByDeterministicRand(t *testing.T) {
 		}
 		counts[got]++
 	}
-	for typ, want := range map[PickupType]float64{PickupAmmo: 0.5, PickupHealth: 0.3, PickupSpeed: 0.2} {
+	for typ, want := range map[PickupType]float64{PickupAmmo: 0, PickupHealth: 0.6, PickupSpeed: 0.4} {
 		if got := float64(counts[typ]) / n; got < want-0.02 || got > want+0.02 {
 			t.Errorf("доля %q = %.3f, want %.2f±0.02", typ, got, want)
 		}

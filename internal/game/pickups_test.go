@@ -2,6 +2,7 @@ package game
 
 import (
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -30,9 +31,59 @@ func TestPickupSpawnsOnIntervalUpToMax(t *testing.T) {
 		t.Fatalf("pickups after 11 s = %d, want capped at %d", len(ps), cfg.MaxPickups)
 	}
 	for _, p := range ps {
-		if p.Type != PickupHealth && p.Type != PickupSpeed && p.Type != PickupAmmo {
-			t.Fatalf("unknown pickup type %q", p.Type)
+		if p.Type != PickupHealth && p.Type != PickupSpeed {
+			t.Fatalf("общий поток дал пикап %q, want health или speed", p.Type)
 		}
+	}
+}
+
+// Ammo идёт своим потоком: свой интервал и лимит, общий лимит его не блокирует.
+func TestAmmoPickupStreamIndependent(t *testing.T) {
+	cfg := testConfig()
+	cfg.PickupInterval, cfg.MaxPickups = 1, 3
+	cfg.AmmoPickupInterval, cfg.MaxAmmoPickups = 0.5, 2
+	w := NewWorld(cfg)
+	w.AddPlayer(1)
+
+	ammo := func() int { return w.countPickups(true) }
+	tickN(w, 9) // 0.45 с
+	if n := ammo(); n != 0 {
+		t.Fatalf("ammo до первого интервала = %d, want 0", n)
+	}
+	tickN(w, 1) // 0.5 с
+	if n := ammo(); n != 1 {
+		t.Fatalf("ammo через 0.5 с = %d, want 1", n)
+	}
+	tickN(w, 10) // 1 с
+	if n := ammo(); n != 2 {
+		t.Fatalf("ammo через 1 с = %d, want 2", n)
+	}
+	tickN(w, 20*10) // общий поток упёрся в свой лимит, ammo — в свой
+	if n, g := ammo(), w.countPickups(false); n != cfg.MaxAmmoPickups || g != cfg.MaxPickups {
+		t.Fatalf("через 11 с ammo = %d, общих = %d, want %d и %d", n, g, cfg.MaxAmmoPickups, cfg.MaxPickups)
+	}
+
+	// Подобрали один ammo — следующий появится не позже чем через интервал.
+	pk := w.pickups[slices.IndexFunc(w.pickups, func(p Pickup) bool { return p.Type == PickupAmmo })]
+	place(w, 1, pk.Pos.X, pk.Pos.Y)
+	w.Update(dt, nil)
+	if n := ammo(); n != 1 {
+		t.Fatalf("после подбора ammo = %d, want 1", n)
+	}
+	tickN(w, 10)
+	if n := ammo(); n != 2 {
+		t.Fatalf("через интервал после подбора ammo = %d, want 2", n)
+	}
+}
+
+func TestAmmoPickupStreamDisabled(t *testing.T) {
+	cfg := testConfig()
+	cfg.AmmoPickupInterval, cfg.MaxAmmoPickups = 0, 2
+	w := NewWorld(cfg)
+	w.AddPlayer(1)
+	tickN(w, 20*30)
+	if n := len(w.Snapshot().Pickups); n != 0 {
+		t.Fatalf("пикапы при выключенных потоках = %d, want 0", n)
 	}
 }
 

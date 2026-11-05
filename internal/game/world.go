@@ -166,9 +166,9 @@ type Config struct {
 	KillLimit        int     // счёт, при достижении которого раунд заканчивается
 	IntermissionTime float64 // пауза между раундами, секунды
 
-	// Пикапы. PickupInterval ≤ 0 отключает их появление.
+	// Пикапы health и speed (тип взвешенно). PickupInterval ≤ 0 отключает их появление.
 	PickupInterval      float64 // секунд между появлениями
-	MaxPickups          int     // одновременно на карте
+	MaxPickups          int     // одновременно на карте (без учёта ammo)
 	PickupRadius        float64
 	PickupMinPlayerDist float64 // минимальное расстояние от центра игрока при спавне
 	HealthAmount        int     // hp от пикапа health
@@ -177,10 +177,14 @@ type Config struct {
 
 	// Патроны: StartAmmo при появлении, респауне и новом раунде, не больше
 	// MaxAmmo; пикап ammo даёт AmmoAmount. MaxAmmo ≤ 0 отключает патроны —
-	// стрельба не ограничена.
-	StartAmmo  int
-	MaxAmmo    int
-	AmmoAmount int
+	// стрельба не ограничена. Пикапы ammo идут отдельным потоком со своим
+	// таймером и лимитом, чтобы не ждать в очереди за health/speed.
+	// AmmoPickupInterval ≤ 0 отключает их появление.
+	StartAmmo          int
+	MaxAmmo            int
+	AmmoAmount         int
+	AmmoPickupInterval float64 // секунд между появлениями ammo
+	MaxAmmoPickups     int     // ammo одновременно на карте
 
 	// Рывок: импульс DashSpeed, линейно затухающий за DashDuration; повтор
 	// не раньше чем через DashCooldown. DashDuration ≤ 0 отключает рывок.
@@ -230,7 +234,7 @@ func DefaultConfig() Config {
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
-		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10,
+		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10, AmmoPickupInterval: 5, MaxAmmoPickups: 2,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 		RespawnDelay: 3, RespawnMinKillerDist: 150, InvulnTime: 1,
 	}
@@ -257,7 +261,8 @@ type World struct {
 
 	pickups     []Pickup
 	nextPickup  PickupID
-	pickupTimer float64 // секунд до следующего появления пикапа
+	pickupTimer float64 // секунд до следующего появления health/speed
+	ammoTimer   float64 // секунд до следующего появления ammo
 }
 
 // NewWorld создаёт пустой мир; первый раунд начинается сразу. Случайность
@@ -270,6 +275,7 @@ func NewWorld(cfg Config) *World {
 		phase:       PhasePlay,
 		timeLeft:    max(cfg.RoundTime, 0),
 		pickupTimer: cfg.PickupInterval,
+		ammoTimer:   cfg.AmmoPickupInterval,
 	}
 }
 

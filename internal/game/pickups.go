@@ -9,22 +9,22 @@ const (
 	PickupAmmo   PickupType = "ammo"   // +AmmoAmount патронов, не выше MaxAmmo
 )
 
-// pickupWeights — веса типов при спавне (в процентах, сумма pickupWeightTotal).
+// pickupWeights — веса типов в общем потоке спавна (в процентах, сумма
+// pickupWeightTotal). Ammo сюда не входит — у него свой поток (AmmoPickupInterval).
 // Порядок важен: бросок rng раскладывается по интервалам подряд, смена порядка
 // меняет симуляцию.
 var pickupWeights = [...]struct {
 	typ    PickupType
 	weight int
 }{
-	{PickupAmmo, 50},
-	{PickupHealth, 30},
-	{PickupSpeed, 20},
+	{PickupHealth, 60},
+	{PickupSpeed, 40},
 }
 
 const pickupWeightTotal = 100
 
 // pickupTypeFor отображает бросок roll ∈ [0, pickupWeightTotal) в тип пикапа:
-// [0, 50) — ammo, [50, 80) — health, [80, 100) — speed.
+// [0, 60) — health, [60, 100) — speed.
 func pickupTypeFor(roll int) PickupType {
 	for _, pw := range pickupWeights {
 		if roll < pw.weight {
@@ -110,31 +110,51 @@ func (w *World) applyPickup(p *Player, pk Pickup) {
 	w.emit(Event{Type: EventPickup, Player: p.ID, Pickup: pk.Type})
 }
 
-// spawnPickups раз в PickupInterval кладёт пикап случайного (взвешенно) типа, если на карте
-// их меньше MaxPickups. PickupInterval ≤ 0 отключает спавн.
+// spawnPickups ведёт два независимых потока: health/speed (взвешенно) раз в
+// PickupInterval до MaxPickups на карте и ammo раз в AmmoPickupInterval до
+// MaxAmmoPickups. Порядок потоков фиксирован — общий, затем ammo — ради детерминизма rng.
 func (w *World) spawnPickups(dt float64, ids []PlayerID) {
-	if w.cfg.PickupInterval <= 0 {
-		return
+	w.pickupTimer = w.spawnStream(dt, ids, w.pickupTimer, w.cfg.PickupInterval, w.cfg.MaxPickups, false)
+	w.ammoTimer = w.spawnStream(dt, ids, w.ammoTimer, w.cfg.AmmoPickupInterval, w.cfg.MaxAmmoPickups, true)
+}
+
+// spawnStream — один поток спавна; возвращает новое значение его таймера.
+// interval ≤ 0 отключает поток. Если лимит потока на карте достигнут, спавн
+// пропускается до следующего интервала; если свободной точки нет, таймер
+// остаётся истёкшим и попытка повторяется на следующем тике.
+func (w *World) spawnStream(dt float64, ids []PlayerID, timer, interval float64, limit int, ammo bool) float64 {
+	if interval <= 0 {
+		return timer
 	}
-	w.pickupTimer -= dt
-	if w.pickupTimer > timeEps {
-		return
+	timer -= dt
+	if timer > timeEps {
+		return timer
 	}
-	if len(w.pickups) >= w.cfg.MaxPickups {
-		w.pickupTimer = w.cfg.PickupInterval // лимит: пропускаем этот спавн
-		return
+	if w.countPickups(ammo) >= limit {
+		return interval
 	}
 	pos, ok := w.pickupPoint(ids)
 	if !ok {
-		return // таймер остаётся истёкшим — попробуем на следующем тике
+		return timer
+	}
+	typ := PickupAmmo
+	if !ammo {
+		typ = w.randomPickupType() // после pickupPoint — порядок бросков rng важен
 	}
 	w.nextPickup++
-	w.pickups = append(w.pickups, Pickup{
-		ID:   w.nextPickup,
-		Type: w.randomPickupType(),
-		Pos:  pos,
-	})
-	w.pickupTimer = w.cfg.PickupInterval
+	w.pickups = append(w.pickups, Pickup{ID: w.nextPickup, Type: typ, Pos: pos})
+	return interval
+}
+
+// countPickups — сколько на карте пикапов потока ammo (ammo = true) или общего.
+func (w *World) countPickups(ammo bool) int {
+	n := 0
+	for _, pk := range w.pickups {
+		if (pk.Type == PickupAmmo) == ammo {
+			n++
+		}
+	}
+	return n
 }
 
 // pickupPoint ищет случайную точку, где круг пикапа не задевает препятствия,
@@ -170,6 +190,7 @@ func (w *World) resetPickups() {
 	clear(w.pickups)
 	w.pickups = w.pickups[:0]
 	w.pickupTimer = w.cfg.PickupInterval
+	w.ammoTimer = w.cfg.AmmoPickupInterval
 }
 
 // speedFactor — множитель скорости игрока с учётом ускорения.
