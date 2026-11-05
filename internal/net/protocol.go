@@ -70,6 +70,10 @@ type PlayerState struct {
 	Boosted bool    `json:"boosted"` // действует ускорение от пикапа speed
 	DashCd  float64 `json:"dashCd"`  // секунд до готовности рывка, 0 — готов
 	LastSeq uint32  `json:"lastSeq"`
+	// Мёртвый игрок ждёт респауна: не цель, не двигается, ввод игнорируется.
+	Dead      bool    `json:"dead"`
+	RespawnIn float64 `json:"respawnIn"` // секунд до респауна, 0 у живого
+	Invuln    bool    `json:"invuln"`    // неуязвим после появления, но может стрелять
 }
 
 // BulletState — летящая пуля. Скорость передаётся, чтобы клиент мог
@@ -90,6 +94,7 @@ const (
 	EventShot      = "shot"
 	EventBulletHit = "bulletHit"
 	EventPickup    = "pickup"
+	EventRespawn   = "respawn"
 )
 
 // Event — одномоментное событие тика этого снапшота. У каждого типа свой
@@ -98,8 +103,9 @@ const (
 //	hit:       {type, x, y, targetId, shooterId}
 //	kill:      {type, targetId, shooterId}
 //	shot:      {type, playerId, x, y}
-//	bulletHit: {type, x, y}            — пуля ударилась о стену или границу
+//	bulletHit: {type, x, y}            — пуля ударилась о стену, границу или неуязвимого игрока
 //	pickup:    {type, playerId, pickupType}
+//	respawn:   {type, playerId, x, y}
 //
 // Теги нужны для разбора (клиенты на Go, тесты); omitempty на числах не
 // годится — координата 0 и ID законны, поэтому форма задаётся типом.
@@ -133,7 +139,7 @@ func (e Event) MarshalJSON() ([]byte, error) {
 			TargetID  uint32 `json:"targetId"`
 			ShooterID uint32 `json:"shooterId"`
 		}{e.Type, e.TargetID, e.ShooterID})
-	case EventShot:
+	case EventShot, EventRespawn:
 		return json.Marshal(struct {
 			Type     string `json:"type"`
 			PlayerID uint32 `json:"playerId"`

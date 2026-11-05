@@ -245,7 +245,11 @@ func TestFireProducesBulletsAndHits(t *testing.T) {
 	rm, _ := startRoom(t)
 	ca, cb := newFakeClient(1024), newFakeClient(1024)
 	a, b := join(t, rm, ca), join(t, rm, cb)
-	s := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, a) && hasPlayer(s, b) })
+	// Ждём конца неуязвимости b после входа: иначе пули гасли бы без урона.
+	s := ca.snapshotUntil(t, func(s anet.Snapshot) bool {
+		p, ok := findPlayer(s, b)
+		return hasPlayer(s, a) && ok && !p.Invuln
+	})
 	pa, _ := findPlayer(s, a)
 	pb, _ := findPlayer(s, b)
 
@@ -460,6 +464,12 @@ func TestSnapshotPickupsAndBoostedJSON(t *testing.T) {
 	if a, ok := got.Players[0]["ammo"]; !ok || a != float64(7) {
 		t.Fatalf("player ammo = %v (present=%v), want 7", a, ok)
 	}
+	// Живой игрок: dead/respawnIn/invuln присутствуют и с нулевыми значениями.
+	for k, want := range map[string]any{"dead": false, "respawnIn": float64(0), "invuln": false} {
+		if v, ok := got.Players[0][k]; !ok || v != want {
+			t.Fatalf("player %s = %v (present=%v), want %v", k, v, ok, want)
+		}
+	}
 	if _, ok := got.Players[0]["speedUntil"]; ok {
 		t.Fatal("speedUntil must not be sent")
 	}
@@ -510,5 +520,28 @@ func TestShotEventDeliveredOncePerShot(t *testing.T) {
 
 	if shots == 0 || shots != len(bullets) {
 		t.Fatalf("shot events = %d, distinct bullets = %d; want one event per shot", shots, len(bullets))
+	}
+}
+
+func TestSnapshotDeadPlayerJSON(t *testing.T) {
+	rm := New("test", slog.New(slog.DiscardHandler))
+	c := newFakeClient(1)
+	rm.clients[1] = c
+
+	rm.broadcast(game.Snapshot{
+		Players: []game.PlayerState{{ID: 2, Dead: true, RespawnIn: 2.5}, {ID: 3, HP: 100, Invuln: true}},
+	})
+	var got struct {
+		Players []map[string]any `json:"players"`
+	}
+	if err := json.Unmarshal(<-c.msgs, &got); err != nil {
+		t.Fatal(err)
+	}
+	dead, fresh := got.Players[0], got.Players[1]
+	if dead["dead"] != true || dead["respawnIn"] != 2.5 || dead["invuln"] != false {
+		t.Fatalf("мёртвый игрок = %v, want dead=true respawnIn=2.5 invuln=false", dead)
+	}
+	if fresh["dead"] != false || fresh["respawnIn"] != float64(0) || fresh["invuln"] != true {
+		t.Fatalf("неуязвимый игрок = %v, want dead=false respawnIn=0 invuln=true", fresh)
 	}
 }

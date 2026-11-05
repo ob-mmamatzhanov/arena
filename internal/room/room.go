@@ -298,6 +298,10 @@ func (r *Room) broadcast(s game.Snapshot) {
 			Boosted: p.Boosted,
 			DashCd:  p.DashCd,
 			LastSeq: p.LastSeq,
+
+			Dead:      p.Dead,
+			RespawnIn: p.RespawnIn,
+			Invuln:    p.Invuln,
 		}
 	}
 	msg.Round = anet.Round{Phase: string(s.Round.Phase), TimeLeft: s.Round.TimeLeft}

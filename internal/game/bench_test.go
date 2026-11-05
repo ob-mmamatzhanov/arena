@@ -23,6 +23,9 @@ func BenchmarkUpdate8Players100Bullets(b *testing.B) {
 			// Без раундов: иначе за сотни тысяч итераций мир уходил бы в
 			// intermission, где Update почти ничего не делает, и цифры врали бы.
 			cfg.RoundTime, cfg.KillLimit = 0, 0
+			// Мгновенный респаун и без неуязвимости: мёртвые и неуязвимые
+			// пропускают часть работы, и цифры зависели бы от числа смертей.
+			cfg.RespawnDelay, cfg.InvulnTime = 0, 0
 			benchUpdate(b, cfg)
 		})
 	}

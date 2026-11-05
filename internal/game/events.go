@@ -7,8 +7,9 @@ const (
 	EventHit       EventType = "hit"       // пуля попала в игрока: Pos, Target, Shooter
 	EventKill      EventType = "kill"      // попадание убило цель: Target, Shooter
 	EventShot      EventType = "shot"      // выстрел: Player, Pos (точка вылета)
-	EventBulletHit EventType = "bulletHit" // пуля ударилась о стену или границу мира: Pos
+	EventBulletHit EventType = "bulletHit" // пуля ударилась о стену, границу мира или неуязвимого игрока: Pos
 	EventPickup    EventType = "pickup"    // игрок подобрал пикап: Player, Pickup
+	EventRespawn   EventType = "respawn"   // игрок возродился: Player, Pos
 )
 
 // Event — одномоментное событие тика. Снапшот передаёт состояние, а не то,
@@ -20,10 +21,10 @@ const (
 // (детерминирован: игроки и пули обходятся в фиксированном порядке).
 type Event struct {
 	Type    EventType
-	Pos     Vec2       // hit, shot, bulletHit
+	Pos     Vec2       // hit, shot, bulletHit, respawn
 	Target  PlayerID   // hit, kill
 	Shooter PlayerID   // hit, kill
-	Player  PlayerID   // shot, pickup
+	Player  PlayerID   // shot, pickup, respawn
 	Pickup  PickupType // pickup
 }
 

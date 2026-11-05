@@ -50,7 +50,18 @@ type Player struct {
 	dashLeft float64 // секунд до конца текущего рывка (0 — рывка нет)
 	dashDir  Vec2    // единичное направление текущего рывка
 	dashCd   float64 // секунд до готовности следующего рывка
+
+	respawnLeft float64  // > 0 — игрок мёртв, секунд до респауна
+	killer      PlayerID // кто убил: респаун не ближе RespawnMinKillerDist к нему
+	invulnLeft  float64  // секунд неуязвимости после появления
 }
+
+// dead — игрок ждёт респауна: не двигается, не стреляет, вводы игнорируются,
+// пули проходят сквозь него.
+func (p *Player) dead() bool { return p.respawnLeft > 0 }
+
+// invulnerable — урон не наносится, но игрок может стрелять.
+func (p *Player) invulnerable() bool { return p.invulnLeft > timeEps }
 
 // PlayerState — неизменяемая копия состояния игрока для снапшота.
 type PlayerState struct {
@@ -64,6 +75,10 @@ type PlayerState struct {
 	Boosted bool    // действует ускорение от пикапа
 	DashCd  float64 // секунд до готовности рывка, 0 — готов
 	LastSeq uint32
+
+	Dead      bool
+	RespawnIn float64 // секунд до респауна, 0 у живого
+	Invuln    bool
 }
 
 // BulletID — идентификатор пули, уникальный в пределах мира.
@@ -173,6 +188,14 @@ type Config struct {
 	DashDuration float64 // секунды
 	DashCooldown float64 // секунды
 
+	// Смерть и респаун. Убитый RespawnDelay секунд мёртв, затем возрождается
+	// в свободной точке не ближе RespawnMinKillerDist к убийце. RespawnDelay ≤ 0 —
+	// респаун в том же тике. После появления (вход, респаун, новый раунд) игрок
+	// InvulnTime секунд неуязвим; InvulnTime ≤ 0 отключает неуязвимость.
+	RespawnDelay         float64 // секунды
+	RespawnMinKillerDist float64
+	InvulnTime           float64 // секунды
+
 	// Seed инициализирует генератор мира (точки респавна). Одинаковый seed
 	// и одинаковые вводы дают одинаковую симуляцию.
 	Seed uint64
@@ -209,6 +232,7 @@ func DefaultConfig() Config {
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
 		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
+		RespawnDelay: 3, RespawnMinKillerDist: 150, InvulnTime: 1,
 	}
 }
 
@@ -266,13 +290,16 @@ func (w *World) HasPlayer(id PlayerID) bool {
 }
 
 // AddPlayer добавляет игрока в детерминированную точку спавна. Игрок входит
-// в текущий раунд (в любой фазе) с нулевым счётом.
+// в текущий раунд (в любой фазе) с нулевым счётом и неуязвимостью.
 // Повторное добавление существующего ID ничего не делает.
 func (w *World) AddPlayer(id PlayerID) {
 	if _, ok := w.players[id]; ok {
 		return
 	}
-	w.players[id] = &Player{ID: id, Pos: w.spawnPoint(id), HP: StartHP, Score: 0, Ammo: w.cfg.StartAmmo}
+	w.players[id] = &Player{
+		ID: id, Pos: w.spawnPoint(id), HP: StartHP, Score: 0, Ammo: w.cfg.StartAmmo,
+		invulnLeft: max(w.cfg.InvulnTime, 0),
+	}
 }
 
 // RemovePlayer удаляет игрока. Идемпотентно.
@@ -281,8 +308,8 @@ func (w *World) RemovePlayer(id PlayerID) {
 }
 
 // Update продвигает симуляцию на dt секунд, применяя inputs.
-// Вводы для неизвестных игроков и устаревшие (seq <= LastSeq) игнорируются.
-// Игрок без нового ввода продолжает двигаться по последнему направлению.
+// Вводы для неизвестных и мёртвых игроков и устаревшие (seq <= LastSeq)
+// игнорируются. Игрок без нового ввода продолжает двигаться по последнему направлению.
 //
 // В intermission мир заморожен: вводы отбрасываются целиком (LastSeq не растёт),
 // игроки и пули стоят, идёт только таймер паузы; по его истечении — новый раунд.
@@ -300,9 +327,13 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 		return
 	}
 
+	// Порядок по ID — чтобы результат не зависел от порядка обхода map.
+	ids := w.sortedIDs()
+	w.updateRespawns(dt, ids) // до вводов: возродившийся в этом тике уже управляем
+
 	for id, in := range inputs {
 		p, ok := w.players[id]
-		if !ok || in.Seq <= p.LastSeq {
+		if !ok || p.dead() || in.Seq <= p.LastSeq {
 			continue
 		}
 		p.Move = sanitizeMove(in.MoveX, in.MoveY)
@@ -315,16 +346,71 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	}
 
 	for _, p := range w.players {
+		if p.dead() {
+			continue
+		}
 		p.Pos = w.move(p.Pos, w.displacement(p, dt))
 	}
 
-	// Порядок по ID — чтобы результат не зависел от порядка обхода map.
-	ids := w.sortedIDs()
 	w.updatePickups(dt, ids)
 	w.updateBullets(dt, ids)
 	w.fire(dt, ids)
+	// Неуязвимость тикает после попаданий: выданная в тике T защищает от
+	// попаданий ровно InvulnTime — в тиках T … T+InvulnTime/dt−1.
+	for _, id := range ids {
+		p := w.players[id]
+		p.invulnLeft = max(p.invulnLeft-dt, 0)
+	}
 	w.advanceRound(dt, ids)
 	w.tick++
+}
+
+// updateRespawns ведёт таймеры мёртвых игроков и возрождает тех, у кого он
+// истёк. Убитый в тике T возрождается в тике T+RespawnDelay/dt.
+func (w *World) updateRespawns(dt float64, ids []PlayerID) {
+	for _, id := range ids { // порядок по ID — детерминированный rng
+		p := w.players[id]
+		if !p.dead() {
+			continue
+		}
+		p.respawnLeft -= dt
+		if p.respawnLeft <= timeEps {
+			w.respawn(p)
+		}
+	}
+}
+
+// killPlayer — HP цели упал до нуля: стрелок получает очко, цель умирает на
+// RespawnDelay (или сразу возрождается, если задержка отключена).
+func (w *World) killPlayer(target *Player, shooter PlayerID) {
+	if s, ok := w.players[shooter]; ok {
+		s.Score++
+	}
+	w.emit(Event{Type: EventKill, Target: target.ID, Shooter: shooter})
+	target.killer = shooter
+	if w.cfg.RespawnDelay <= 0 {
+		w.respawn(target)
+		return
+	}
+	target.HP = 0
+	target.respawnLeft = w.cfg.RespawnDelay
+	target.Move, target.Fire = Vec2{}, false
+	target.speedLeft = 0
+	target.dashReq, target.dashLeft = false, 0
+}
+
+// respawn возрождает игрока в случайной свободной точке подальше от убийцы
+// с полным HP, стартовыми патронами и неуязвимостью.
+func (w *World) respawn(p *Player) {
+	p.respawnLeft = 0
+	p.HP = StartHP
+	p.Ammo = w.cfg.StartAmmo
+	p.Pos = w.respawnPoint(p.ID, p.killer)
+	p.killer = 0
+	p.cooldown, p.Heat = 0, 0
+	p.dashCd = 0
+	p.invulnLeft = max(w.cfg.InvulnTime, 0)
+	w.emit(Event{Type: EventRespawn, Player: p.ID, Pos: p.Pos})
 }
 
 // advanceRound ведёт таймер раунда и завершает раунд по времени или лимиту фрагов.
@@ -376,8 +462,9 @@ func (w *World) endRound(ids []PlayerID) {
 	}
 }
 
-// startRound начинает новый раунд: у всех полное HP и нулевой счёт, все
-// респавнятся в случайных свободных точках, пули, пикапы и вооружение сбрасываются.
+// startRound начинает новый раунд: у всех полное HP и нулевой счёт, мёртвые
+// оживают, все респавнятся в случайных свободных точках с неуязвимостью, пули,
+// пикапы и вооружение сбрасываются.
 func (w *World) startRound() {
 	w.phase = PhasePlay
 	w.timeLeft = max(w.cfg.RoundTime, 0)
@@ -390,7 +477,9 @@ func (w *World) startRound() {
 		p.HP = StartHP
 		p.Score = 0
 		p.Ammo = w.cfg.StartAmmo
-		p.Pos = w.respawnPoint(id)
+		p.respawnLeft, p.killer = 0, 0
+		p.invulnLeft = max(w.cfg.InvulnTime, 0)
+		p.Pos = w.respawnPoint(id, 0)
 		p.Move = Vec2{}
 		p.Fire = false
 		p.cooldown = 0
@@ -579,8 +668,9 @@ func (w *World) updateBullets(dt float64, ids []PlayerID) {
 	w.bullets = alive
 }
 
-// firstHit возвращает ближайшего к началу отрезка игрока (кроме владельца),
-// которого задевает пуля на пути from→to, точку попадания и её параметр t∈[0, 1].
+// firstHit возвращает ближайшего к началу отрезка игрока (кроме владельца
+// и мёртвых — сквозь них пуля проходит), которого задевает пуля на пути
+// from→to, точку попадания и её параметр t∈[0, 1].
 func (w *World) firstHit(owner PlayerID, from, to Vec2, ids []PlayerID) (*Player, Vec2, float64, bool) {
 	r := w.cfg.HitRadius + w.cfg.BulletRadius
 	r2 := r * r // сравниваем квадраты: без Hypot в горячем цикле
@@ -597,6 +687,9 @@ func (w *World) firstHit(owner PlayerID, from, to Vec2, ids []PlayerID) (*Player
 			continue
 		}
 		p := w.players[id]
+		if p.dead() {
+			continue
+		}
 		t := 0.0
 		if dd > 0 {
 			t = clamp(((p.Pos.X-from.X)*d.X+(p.Pos.Y-from.Y)*d.Y)/dd, 0, 1)
@@ -609,19 +702,17 @@ func (w *World) firstHit(owner PlayerID, from, to Vec2, ids []PlayerID) (*Player
 	return best, bestP, bestT, best != nil
 }
 
-// applyHit наносит урон. Погибшая цель сразу возрождается с полным HP
-// в случайной точке, стрелок (если ещё в мире) получает очко.
+// applyHit наносит урон; при HP ≤ 0 цель погибает (см. killPlayer).
+// Неуязвимая цель останавливает пулю без урона — как стена, событием bulletHit.
 func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
+	if target.invulnerable() {
+		w.emit(Event{Type: EventBulletHit, Pos: at})
+		return
+	}
 	target.HP -= w.cfg.BulletDamage
 	w.emit(Event{Type: EventHit, Pos: at, Target: target.ID, Shooter: shooter})
 	if target.HP <= 0 {
-		if s, ok := w.players[shooter]; ok {
-			s.Score++
-		}
-		target.HP = StartHP
-		target.Ammo = w.cfg.StartAmmo
-		target.Pos = w.respawnPoint(target.ID)
-		w.emit(Event{Type: EventKill, Target: target.ID, Shooter: shooter})
+		w.killPlayer(target, shooter)
 	}
 }
 
@@ -634,6 +725,9 @@ func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
 func (w *World) fire(dt float64, ids []PlayerID) {
 	for _, id := range ids {
 		p := w.players[id]
+		if p.dead() {
+			continue
+		}
 		p.cooldown = math.Max(0, p.cooldown-dt)
 		if !p.Fire || p.cooldown > timeEps || !w.hasAmmo(p) {
 			p.Heat = max(p.Heat-w.cfg.HeatDecay*dt, 0)
@@ -679,6 +773,10 @@ func (w *World) spread(heat float64) float64 {
 func (w *World) Snapshot() Snapshot {
 	ps := make([]PlayerState, 0, len(w.players))
 	for _, p := range w.players {
+		respawnIn := 0.0
+		if p.dead() {
+			respawnIn = p.respawnLeft
+		}
 		ps = append(ps, PlayerState{
 			ID:      p.ID,
 			Pos:     p.Pos,
@@ -690,6 +788,10 @@ func (w *World) Snapshot() Snapshot {
 			Boosted: p.speedLeft > timeEps,
 			DashCd:  p.dashCooldownLeft(),
 			LastSeq: p.LastSeq,
+
+			Dead:      p.dead(),
+			RespawnIn: respawnIn,
+			Invuln:    p.invulnerable(),
 		})
 	}
 	slices.SortFunc(ps, func(a, b PlayerState) int {
@@ -723,10 +825,15 @@ func (w *World) Snapshot() Snapshot {
 	}
 }
 
+// spawnSlots — число фиксированных точек спавна на окружности.
+const spawnSlots = 8
+
 // spawnPoint раскладывает игроков по окружности вокруг центра арены.
-func (w *World) spawnPoint(id PlayerID) Vec2 {
-	const slots = 8
-	angle := 2 * math.Pi * float64(uint32(id)%slots) / slots
+func (w *World) spawnPoint(id PlayerID) Vec2 { return w.spawnSlot(uint32(id)) }
+
+// spawnSlot — точка спавна номер slot (по модулю spawnSlots).
+func (w *World) spawnSlot(slot uint32) Vec2 {
+	angle := 2 * math.Pi * float64(slot%spawnSlots) / spawnSlots
 	radius := math.Min(w.cfg.Width, w.cfg.Height) / 3
 	return w.clampToWorld(Vec2{
 		X: w.cfg.Width/2 + radius*math.Cos(angle),
@@ -739,20 +846,40 @@ func (w *World) spawnPoint(id PlayerID) Vec2 {
 // исчерпать попытки пренебрежимо мал.
 const respawnAttempts = 64
 
-// respawnPoint возвращает случайную свободную от препятствий точку.
-// Случайность — только из генератора мира, не глобальный rand.
-func (w *World) respawnPoint(id PlayerID) Vec2 {
+// respawnPoint возвращает случайную свободную от препятствий точку не ближе
+// RespawnMinKillerDist к убийце killer (0, сам игрок или ушедший из мира —
+// без ограничения). Случайность — только из генератора мира, не глобальный rand.
+func (w *World) respawnPoint(id, killer PlayerID) Vec2 {
+	var (
+		avoid Vec2
+		minD2 float64 // 0 — ограничения нет
+	)
+	if k, ok := w.players[killer]; ok && killer != id && w.cfg.RespawnMinKillerDist > 0 {
+		avoid, minD2 = k.Pos, w.cfg.RespawnMinKillerDist*w.cfg.RespawnMinKillerDist
+	}
+	farEnough := func(p Vec2) bool {
+		dx, dy := p.X-avoid.X, p.Y-avoid.Y
+		return dx*dx+dy*dy >= minD2
+	}
+
 	lo, hi := w.bounds()
 	for range respawnAttempts {
 		p := Vec2{
 			X: lo.X + w.rng.Float64()*(hi.X-lo.X),
 			Y: lo.Y + w.rng.Float64()*(hi.Y-lo.Y),
 		}
-		if w.isFree(p) {
+		if w.isFree(p) && farEnough(p) {
 			return p
 		}
 	}
-	return w.spawnPoint(id) // свободна по построению карты (см. DefaultObstacles)
+	// Фиксированные точки свободны по построению карты (см. DefaultObstacles);
+	// начиная со своей, берём первую достаточно далёкую от убийцы.
+	for i := range uint32(spawnSlots) {
+		if p := w.spawnSlot(uint32(id) + i); farEnough(p) {
+			return p
+		}
+	}
+	return w.spawnPoint(id)
 }
 
 // bounds — допустимый диапазон центра игрока: [0, Width]×[0, Height] с отступом

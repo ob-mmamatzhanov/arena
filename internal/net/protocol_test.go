@@ -21,6 +21,8 @@ func TestEventJSONShapes(t *testing.T) {
 			`{"type":"bulletHit","x":1000,"y":0}`},
 		{Event{Type: EventPickup, PlayerID: 3, PickupType: PickupHealth, X: 1},
 			`{"type":"pickup","playerId":3,"pickupType":"health"}`},
+		{Event{Type: EventRespawn, PlayerID: 0, X: 0, Y: 7, TargetID: 2, PickupType: "x"},
+			`{"type":"respawn","playerId":0,"x":0,"y":7}`},
 	}
 	for _, tt := range tests {
 		got, err := json.Marshal(tt.ev)

@@ -78,6 +78,9 @@ func (w *World) collectPickups(ids []PlayerID) {
 	r := w.cfg.PlayerRadius + w.cfg.PickupRadius
 	for _, id := range ids {
 		p := w.players[id]
+		if p.dead() {
+			continue // мёртвые не подбирают
+		}
 		left := w.pickups[:0]
 		for _, pk := range w.pickups {
 			dx, dy := pk.Pos.X-p.Pos.X, pk.Pos.Y-p.Pos.Y

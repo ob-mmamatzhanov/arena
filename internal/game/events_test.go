@@ -77,8 +77,9 @@ func TestKillEventFollowsHit(t *testing.T) {
 		if len(evs) == 0 {
 			continue
 		}
-		if len(evs) != 2 || evs[0].Type != EventHit || evs[1].Type != EventKill {
-			t.Fatalf("kill tick events = %+v, want [hit, kill]", evs)
+		// Задержка респауна в testConfig выключена — respawn в том же тике.
+		if len(evs) != 3 || evs[0].Type != EventHit || evs[1].Type != EventKill || evs[2].Type != EventRespawn {
+			t.Fatalf("kill tick events = %+v, want [hit, kill, respawn]", evs)
 		}
 		if k := evs[1]; k.Target != 2 || k.Shooter != 1 {
 			t.Fatalf("kill event = %+v, want 1 -> 2", k)
