@@ -52,6 +52,7 @@ func benchUpdate(b *testing.B, cfg Config) {
 	for i := 0; b.Loop(); i++ {
 		w.bullets = append(w.bullets[:0], template...)
 		for id := PlayerID(1); id <= 8; id++ {
+			w.players[id].Ammo = cfg.MaxAmmo // патроны не кончаются: все держат огонь
 			// Направление меняется, чтобы игроки не залипали в одном углу.
 			a := float64(i/40) + float64(id)
 			inputs[id] = Input{Seq: uint32(i + 1), MoveX: math.Cos(a), MoveY: math.Sin(a), Angle: float64(id), Fire: true}

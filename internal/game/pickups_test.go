@@ -30,7 +30,7 @@ func TestPickupSpawnsOnIntervalUpToMax(t *testing.T) {
 		t.Fatalf("pickups after 11 s = %d, want capped at %d", len(ps), cfg.MaxPickups)
 	}
 	for _, p := range ps {
-		if p.Type != PickupHealth && p.Type != PickupSpeed {
+		if p.Type != PickupHealth && p.Type != PickupSpeed && p.Type != PickupAmmo {
 			t.Fatalf("unknown pickup type %q", p.Type)
 		}
 	}

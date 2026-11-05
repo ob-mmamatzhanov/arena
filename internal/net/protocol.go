@@ -66,6 +66,7 @@ type PlayerState struct {
 	Heat    float64 `json:"heat"` // перегрев [0, 1]: разброс ±heat×0.25 рад, для прицела
 	HP      int     `json:"hp"`
 	Score   int     `json:"score"`
+	Ammo    int     `json:"ammo"`
 	Boosted bool    `json:"boosted"` // действует ускорение от пикапа speed
 	DashCd  float64 `json:"dashCd"`  // секунд до готовности рывка, 0 — готов
 	LastSeq uint32  `json:"lastSeq"`
@@ -196,6 +197,7 @@ type Snapshot struct {
 const (
 	PickupHealth = "health"
 	PickupSpeed  = "speed"
+	PickupAmmo   = "ammo"
 )
 
 // Pickup — пикап на карте.

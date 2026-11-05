@@ -15,7 +15,8 @@ func testConfig() Config {
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
 		// Спавн пикапов выключен (PickupInterval = 0), параметры — для тестов подбора.
 		MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
-		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
+		// Патроны выключены (MaxAmmo = 0): стрельба без ограничений; AmmoAmount — для тестов пикапа.
+		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5, AmmoAmount: 10,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 		Seed: 1,
 	}

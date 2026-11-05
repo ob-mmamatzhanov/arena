@@ -41,6 +41,7 @@ type Player struct {
 	Heat     float64 // перегрев ствола [0, 1]: определяет разброс выстрелов
 	HP       int
 	Score    int
+	Ammo     int    // патроны; при MaxAmmo ≤ 0 не расходуются
 	LastSeq  uint32 // seq последнего применённого ввода — для client-side reconciliation
 
 	speedLeft float64 // секунд ускорения от пикапа speed
@@ -59,6 +60,7 @@ type PlayerState struct {
 	Heat    float64
 	HP      int
 	Score   int
+	Ammo    int
 	Boosted bool    // действует ускорение от пикапа
 	DashCd  float64 // секунд до готовности рывка, 0 — готов
 	LastSeq uint32
@@ -158,6 +160,13 @@ type Config struct {
 	SpeedMultiplier     float64 // множитель скорости от пикапа speed
 	SpeedDuration       float64 // секунды
 
+	// Патроны: StartAmmo при появлении, респауне и новом раунде, не больше
+	// MaxAmmo; пикап ammo даёт AmmoAmount. MaxAmmo ≤ 0 отключает патроны —
+	// стрельба не ограничена.
+	StartAmmo  int
+	MaxAmmo    int
+	AmmoAmount int
+
 	// Рывок: импульс DashSpeed, линейно затухающий за DashDuration; повтор
 	// не раньше чем через DashCooldown. DashDuration ≤ 0 отключает рывок.
 	DashSpeed    float64 // единиц в секунду в начале рывка
@@ -198,6 +207,7 @@ func DefaultConfig() Config {
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
+		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 	}
 }
@@ -262,7 +272,7 @@ func (w *World) AddPlayer(id PlayerID) {
 	if _, ok := w.players[id]; ok {
 		return
 	}
-	w.players[id] = &Player{ID: id, Pos: w.spawnPoint(id), HP: StartHP, Score: 0}
+	w.players[id] = &Player{ID: id, Pos: w.spawnPoint(id), HP: StartHP, Score: 0, Ammo: w.cfg.StartAmmo}
 }
 
 // RemovePlayer удаляет игрока. Идемпотентно.
@@ -379,6 +389,7 @@ func (w *World) startRound() {
 		p := w.players[id]
 		p.HP = StartHP
 		p.Score = 0
+		p.Ammo = w.cfg.StartAmmo
 		p.Pos = w.respawnPoint(id)
 		p.Move = Vec2{}
 		p.Fire = false
@@ -608,6 +619,7 @@ func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
 			s.Score++
 		}
 		target.HP = StartHP
+		target.Ammo = w.cfg.StartAmmo
 		target.Pos = w.respawnPoint(target.ID)
 		w.emit(Event{Type: EventKill, Target: target.ID, Shooter: shooter})
 	}
@@ -617,13 +629,13 @@ func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
 // Пуля вылетает из позиции игрока; по владельцу она не попадает (см. firstHit).
 //
 // Разброс берётся от heat до выстрела: первый выстрел с холодного ствола точен.
-// В тиках без выстрела (огонь отпущен или кулдаун) heat остывает.
+// В тиках без выстрела (огонь отпущен, кулдаун или нет патронов) heat остывает.
 // Игроки обходятся по ID, поэтому последовательность rng детерминирована.
 func (w *World) fire(dt float64, ids []PlayerID) {
 	for _, id := range ids {
 		p := w.players[id]
 		p.cooldown = math.Max(0, p.cooldown-dt)
-		if !p.Fire || p.cooldown > timeEps {
+		if !p.Fire || p.cooldown > timeEps || !w.hasAmmo(p) {
 			p.Heat = max(p.Heat-w.cfg.HeatDecay*dt, 0)
 			continue
 		}
@@ -640,7 +652,16 @@ func (w *World) fire(dt float64, ids []PlayerID) {
 		})
 		w.emit(Event{Type: EventShot, Player: id, Pos: p.Pos})
 		p.cooldown = w.cfg.FireCooldown
+		if w.cfg.MaxAmmo > 0 {
+			p.Ammo--
+		}
 	}
+}
+
+// hasAmmo — может ли игрок выстрелить по патронам. При MaxAmmo ≤ 0 патроны
+// отключены и стрельба не ограничена.
+func (w *World) hasAmmo(p *Player) bool {
+	return w.cfg.MaxAmmo <= 0 || p.Ammo > 0
 }
 
 // spread — случайное отклонение угла в ±heat×MaxSpread из генератора мира.
@@ -665,6 +686,7 @@ func (w *World) Snapshot() Snapshot {
 			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
+			Ammo:    p.Ammo,
 			Boosted: p.speedLeft > timeEps,
 			DashCd:  p.dashCooldownLeft(),
 			LastSeq: p.LastSeq,

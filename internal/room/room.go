@@ -294,6 +294,7 @@ func (r *Room) broadcast(s game.Snapshot) {
 			Heat:    p.Heat,
 			HP:      p.HP,
 			Score:   p.Score,
+			Ammo:    p.Ammo,
 			Boosted: p.Boosted,
 			DashCd:  p.DashCd,
 			LastSeq: p.LastSeq,

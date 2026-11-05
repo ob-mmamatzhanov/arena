@@ -6,10 +6,39 @@ type PickupType string
 const (
 	PickupHealth PickupType = "health" // +HealthAmount hp, не выше StartHP
 	PickupSpeed  PickupType = "speed"  // ×SpeedMultiplier к скорости на SpeedDuration
+	PickupAmmo   PickupType = "ammo"   // +AmmoAmount патронов, не выше MaxAmmo
 )
 
-// pickupTypes — порядок важен: rng выбирает индекс, смена порядка меняет симуляцию.
-var pickupTypes = [...]PickupType{PickupHealth, PickupSpeed}
+// pickupWeights — веса типов при спавне (в процентах, сумма pickupWeightTotal).
+// Порядок важен: бросок rng раскладывается по интервалам подряд, смена порядка
+// меняет симуляцию.
+var pickupWeights = [...]struct {
+	typ    PickupType
+	weight int
+}{
+	{PickupAmmo, 50},
+	{PickupHealth, 30},
+	{PickupSpeed, 20},
+}
+
+const pickupWeightTotal = 100
+
+// pickupTypeFor отображает бросок roll ∈ [0, pickupWeightTotal) в тип пикапа:
+// [0, 50) — ammo, [50, 80) — health, [80, 100) — speed.
+func pickupTypeFor(roll int) PickupType {
+	for _, pw := range pickupWeights {
+		if roll < pw.weight {
+			return pw.typ
+		}
+		roll -= pw.weight
+	}
+	return pickupWeights[len(pickupWeights)-1].typ
+}
+
+// randomPickupType — взвешенный выбор типа из генератора мира.
+func (w *World) randomPickupType() PickupType {
+	return pickupTypeFor(w.rng.IntN(pickupWeightTotal))
+}
 
 // PickupID — идентификатор пикапа, уникальный в пределах мира.
 type PickupID uint32
@@ -63,19 +92,22 @@ func (w *World) collectPickups(ids []PlayerID) {
 	}
 }
 
-// applyPickup применяет эффект. Health подбирается и при полном HP (HP не
-// превышает StartHP); повторный speed продлевает ускорение, а не суммирует.
+// applyPickup применяет эффект. Health и ammo подбираются и при полном запасе
+// (HP не превышает StartHP, патроны — MaxAmmo); повторный speed продлевает
+// ускорение, а не суммирует.
 func (w *World) applyPickup(p *Player, pk Pickup) {
 	switch pk.Type {
 	case PickupHealth:
 		p.HP = min(p.HP+w.cfg.HealthAmount, StartHP)
 	case PickupSpeed:
 		p.speedLeft = w.cfg.SpeedDuration
+	case PickupAmmo:
+		p.Ammo = min(p.Ammo+w.cfg.AmmoAmount, max(w.cfg.MaxAmmo, 0))
 	}
 	w.emit(Event{Type: EventPickup, Player: p.ID, Pickup: pk.Type})
 }
 
-// spawnPickups раз в PickupInterval кладёт пикап случайного типа, если на карте
+// spawnPickups раз в PickupInterval кладёт пикап случайного (взвешенно) типа, если на карте
 // их меньше MaxPickups. PickupInterval ≤ 0 отключает спавн.
 func (w *World) spawnPickups(dt float64, ids []PlayerID) {
 	if w.cfg.PickupInterval <= 0 {
@@ -96,7 +128,7 @@ func (w *World) spawnPickups(dt float64, ids []PlayerID) {
 	w.nextPickup++
 	w.pickups = append(w.pickups, Pickup{
 		ID:   w.nextPickup,
-		Type: pickupTypes[w.rng.IntN(len(pickupTypes))],
+		Type: w.randomPickupType(),
 		Pos:  pos,
 	})
 	w.pickupTimer = w.cfg.PickupInterval

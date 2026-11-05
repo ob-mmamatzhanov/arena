@@ -441,8 +441,8 @@ func TestSnapshotPickupsAndBoostedJSON(t *testing.T) {
 	rm.clients[1] = c
 
 	rm.broadcast(game.Snapshot{
-		Players: []game.PlayerState{{ID: 1, HP: 100, Boosted: true}},
-		Pickups: []game.Pickup{{ID: 7, Type: game.PickupSpeed, Pos: game.Vec2{X: 10, Y: 20}}},
+		Players: []game.PlayerState{{ID: 1, HP: 100, Ammo: 7, Boosted: true}},
+		Pickups: []game.Pickup{{ID: 7, Type: game.PickupAmmo, Pos: game.Vec2{X: 10, Y: 20}}},
 	})
 	var got struct {
 		Players []map[string]any `json:"players"`
@@ -451,11 +451,14 @@ func TestSnapshotPickupsAndBoostedJSON(t *testing.T) {
 	if err := json.Unmarshal(<-c.msgs, &got); err != nil {
 		t.Fatal(err)
 	}
-	if want := `[{"id":7,"type":"speed","x":10,"y":20}]`; string(got.Pickups) != want {
+	if want := `[{"id":7,"type":"ammo","x":10,"y":20}]`; string(got.Pickups) != want {
 		t.Fatalf("pickups = %s, want %s", got.Pickups, want)
 	}
 	if b, ok := got.Players[0]["boosted"]; !ok || b != true {
 		t.Fatalf("player boosted = %v (present=%v), want true", b, ok)
+	}
+	if a, ok := got.Players[0]["ammo"]; !ok || a != float64(7) {
+		t.Fatalf("player ammo = %v (present=%v), want 7", a, ok)
 	}
 	if _, ok := got.Players[0]["speedUntil"]; ok {
 		t.Fatal("speedUntil must not be sent")
