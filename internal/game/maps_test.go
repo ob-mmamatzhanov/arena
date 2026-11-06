@@ -12,13 +12,14 @@ func allMaps() []Map {
 
 // Параметры принципов карты (см. ArenaMap).
 const (
-	mapCoverStep      = 40.0  // шаг сетки проверки укрытия
-	mapMaxCoverDist   = 140.0 // ближайшее препятствие не дальше
-	mapMinPassage     = 32.0  // проход между препятствиями: диаметр игрока 24 + запас
-	mapSpawnClearance = 60.0  // спавн не ближе к препятствию
-	mapPlayerRadius   = 12.0  // DefaultConfig().PlayerRadius
-	mapBulletRadius   = 3.0   // DefaultConfig().BulletRadius
-	mapEps            = 1e-9
+	mapCoverStep       = 40.0  // шаг сетки проверки укрытия
+	mapMaxCoverDist    = 140.0 // ближайшее препятствие не дальше
+	mapMinPassage      = 32.0  // проход между препятствиями: диаметр игрока 24 + запас
+	mapSpawnClearance  = 60.0  // спавн не ближе к препятствию
+	mapSpawnSeparation = 60.0  // спавны не ближе друг к другу
+	mapPlayerRadius    = 12.0  // DefaultConfig().PlayerRadius
+	mapBulletRadius    = 3.0   // DefaultConfig().BulletRadius
+	mapEps             = 1e-9
 )
 
 // slit — щель между двумя ящиками, выровненными по одной оси.
@@ -156,6 +157,14 @@ func TestMapSpawnsClearOfObstacles(t *testing.T) {
 			}
 			if !spawnHiddenFromCenter(m, s) {
 				t.Errorf("спавн %v виден из центра карты: линию ничто не перекрывает", s)
+			}
+		}
+		// Спавны разнесены: двое вошедших одновременно не появляются бок о бок.
+		for i, a := range m.Spawns {
+			for _, b := range m.Spawns[i+1:] {
+				if d := math.Hypot(a.X-b.X, a.Y-b.Y); d < mapSpawnSeparation-mapEps {
+					t.Errorf("спавны %v и %v в %.1f px друг от друга, нужно ≥ %v", a, b, d, mapSpawnSeparation)
+				}
 			}
 		}
 		// По две точки на каждую сторону карты (ближайший край).
