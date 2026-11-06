@@ -158,6 +158,48 @@ func join(t *testing.T, rm *Room, c Client) uint32 {
 	return id
 }
 
+// В Welcome у каждого препятствия есть поле kind; пустой вид в конфиге
+// отдаётся как "brick".
+func TestWelcomeObstacleKindJSON(t *testing.T) {
+	cfg := game.DefaultConfig()
+	cfg.Obstacles = []game.Obstacle{
+		{X: 10, Y: 20, W: 30, H: 40},
+		{X: 100, Y: 200, W: 32, H: 32, Kind: game.ObstacleCrate},
+	}
+	rm, _ := startRoomWith(t, &cfg)
+	c := newFakeClient(64)
+	join(t, rm, c)
+
+	var raw struct {
+		Obstacles []map[string]any `json:"obstacles"`
+	}
+	select {
+	case b := <-c.msgs:
+		if err := json.Unmarshal(b, &raw); err != nil {
+			t.Fatalf("bad message %q: %v", b, err)
+		}
+	case <-time.After(waitTimeout):
+		t.Fatal("no welcome received")
+	}
+	want := []map[string]any{
+		{"x": 10.0, "y": 20.0, "w": 30.0, "h": 40.0, "kind": "brick"},
+		{"x": 100.0, "y": 200.0, "w": 32.0, "h": 32.0, "kind": "crate"},
+	}
+	if len(raw.Obstacles) != len(want) {
+		t.Fatalf("obstacles = %v, want %v", raw.Obstacles, want)
+	}
+	for i := range want {
+		if len(raw.Obstacles[i]) != len(want[i]) {
+			t.Errorf("obstacle %d keys = %v, want %v", i, raw.Obstacles[i], want[i])
+		}
+		for k, v := range want[i] {
+			if raw.Obstacles[i][k] != v {
+				t.Errorf("obstacle %d: %s = %v, want %v", i, k, raw.Obstacles[i][k], v)
+			}
+		}
+	}
+}
+
 func TestJoinSendsWelcomeAndAddsPlayerOnTick(t *testing.T) {
 	rm, _ := startRoom(t)
 	c := newFakeClient(64)
@@ -178,7 +220,7 @@ func TestJoinSendsWelcomeAndAddsPlayerOnTick(t *testing.T) {
 		t.Fatalf("welcome obstacles = %+v, want %d from world config", w.Obstacles, len(obs))
 	}
 	for i, o := range obs {
-		if got := w.Obstacles[i]; got != (anet.Obstacle{X: o.X, Y: o.Y, W: o.W, H: o.H}) {
+		if got := w.Obstacles[i]; got != (anet.Obstacle{X: o.X, Y: o.Y, W: o.W, H: o.H, Kind: string(o.KindOrDefault())}) {
 			t.Fatalf("welcome obstacle %d = %+v, want %+v", i, got, o)
 		}
 	}

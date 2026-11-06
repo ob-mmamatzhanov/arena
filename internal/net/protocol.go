@@ -49,12 +49,14 @@ type Welcome struct {
 	Obstacles []Obstacle `json:"obstacles"`
 }
 
-// Obstacle — препятствие карты: левый верхний угол (x, y), ширина w, высота h.
+// Obstacle — препятствие карты: левый верхний угол (x, y), ширина w, высота h,
+// вид kind ("brick" или "crate"; всегда заполнен).
 type Obstacle struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	W float64 `json:"w"`
-	H float64 `json:"h"`
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	W    float64 `json:"w"`
+	H    float64 `json:"h"`
+	Kind string  `json:"kind"`
 }
 
 // PlayerState — состояние одного игрока в снапшоте.

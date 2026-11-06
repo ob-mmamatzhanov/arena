@@ -26,8 +26,27 @@ type Map struct {
 }
 
 // Obstacle — прямоугольник карты: левый верхний угол (X, Y), ширина W, высота H.
+// Kind — вид препятствия для клиента (отрисовка); на симуляцию не влияет.
+// Пустой Kind означает ObstacleBrick.
 type Obstacle struct {
 	X, Y, W, H float64
+	Kind       ObstacleKind
+}
+
+// ObstacleKind — вид препятствия.
+type ObstacleKind string
+
+const (
+	ObstacleBrick ObstacleKind = "brick" // стена, вид по умолчанию
+	ObstacleCrate ObstacleKind = "crate" // ящик
+)
+
+// KindOrDefault — вид препятствия с подстановкой ObstacleBrick вместо пустого.
+func (o Obstacle) KindOrDefault() ObstacleKind {
+	if o.Kind == "" {
+		return ObstacleBrick
+	}
+	return o.Kind
 }
 
 // Zone — область карты: круг (R > 0, центр X, Y) или прямоугольник (X, Y, W, H).

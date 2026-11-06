@@ -168,7 +168,7 @@ func (r *Room) handleJoin(req joinReq) {
 	cfg := r.world.Config()
 	obstacles := make([]anet.Obstacle, len(cfg.Obstacles))
 	for i, o := range cfg.Obstacles {
-		obstacles[i] = anet.Obstacle{X: o.X, Y: o.Y, W: o.W, H: o.H}
+		obstacles[i] = anet.Obstacle{X: o.X, Y: o.Y, W: o.W, H: o.H, Kind: string(o.KindOrDefault())}
 	}
 	welcome, err := json.Marshal(anet.Welcome{
 		Type:         anet.TypeWelcome,
