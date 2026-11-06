@@ -1,27 +1,32 @@
-app = "arena-ob"
-primary_region = "ams"
+# fly.toml app configuration file generated for arena-ob on 2026-11-04T21:20:07Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'arena-ob'
+primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [processes]
-  app = "-addr :8080 -origins localhost:*,127.0.0.1:*,arena-client.mmamatzhanov.workers.dev"
+  app = '-addr :8080 -origins localhost:*,127.0.0.1:*,arena-client.mmamatzhanov.workers.dev'
 
 [http_service]
   internal_port = 8080
-  processes = ["app"]
   force_https = true
-  auto_stop_machines = "off"
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
+  processes = ['app']
 
   [[http_service.checks]]
-    interval = "15s"
-    timeout = "3s"
-    grace_period = "5s"
-    method = "GET"
-    path = "/healthz"
+    interval = '15s'
+    timeout = '3s'
+    grace_period = '5s'
+    method = 'GET'
+    path = '/healthz'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  size = 'shared-cpu-1x'
+  memory = '256mb'
