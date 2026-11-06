@@ -17,8 +17,60 @@ const (
 	mapMinPassage     = 32.0  // проход между препятствиями: диаметр игрока 24 + запас
 	mapSpawnClearance = 60.0  // спавн не ближе к препятствию
 	mapPlayerRadius   = 12.0  // DefaultConfig().PlayerRadius
+	mapBulletRadius   = 3.0   // DefaultConfig().BulletRadius
 	mapEps            = 1e-9
 )
+
+// slit — щель между двумя ящиками, выровненными по одной оси.
+// Horizontal: щель — горизонтальная полоса Lo < y < Hi над/под ящиками
+// с общим отрезком [From, To] по x; иначе — вертикальная полоса по x.
+type slit struct {
+	A, B       Obstacle
+	Horizontal bool
+	Lo, Hi     float64 // границы щели поперёк неё
+	From, To   float64 // протяжённость щели вдоль неё
+}
+
+func (s slit) width() float64 { return s.Hi - s.Lo }
+func (s slit) mid() float64   { return (s.Lo + s.Hi) / 2 }
+
+// crateSlit — щель между a и b, если оба — ящики, стоят один над другим
+// (или рядом) с совпадающими гранями, не касаются и зазор уже прохода mapMinPassage.
+func crateSlit(a, b Obstacle) (slit, bool) {
+	if a.KindOrDefault() != ObstacleCrate || b.KindOrDefault() != ObstacleCrate {
+		return slit{}, false
+	}
+	if near(a.X, b.X) && near(a.W, b.W) {
+		if a.Y > b.Y {
+			a, b = b, a
+		}
+		if lo, hi := a.Y+a.H, b.Y; hi > lo+mapEps && hi-lo < mapMinPassage-mapEps {
+			return slit{A: a, B: b, Horizontal: true, Lo: lo, Hi: hi, From: a.X, To: a.X + a.W}, true
+		}
+	}
+	if near(a.Y, b.Y) && near(a.H, b.H) {
+		if a.X > b.X {
+			a, b = b, a
+		}
+		if lo, hi := a.X+a.W, b.X; hi > lo+mapEps && hi-lo < mapMinPassage-mapEps {
+			return slit{A: a, B: b, Horizontal: false, Lo: lo, Hi: hi, From: a.Y, To: a.Y + a.H}, true
+		}
+	}
+	return slit{}, false
+}
+
+// crateSlits — все щели между ящиками карты.
+func crateSlits(m Map) []slit {
+	var out []slit
+	for i, a := range m.Obstacles {
+		for _, b := range m.Obstacles[i+1:] {
+			if s, ok := crateSlit(a, b); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
 
 func forEachMap(t *testing.T, f func(t *testing.T, m Map)) {
 	for _, m := range allMaps() {
@@ -43,10 +95,11 @@ func near(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 func TestMapRotationalSymmetry(t *testing.T) {
 	forEachMap(t, func(t *testing.T, m Map) {
 		for _, o := range m.Obstacles {
-			want := Obstacle{X: m.Width - o.X - o.W, Y: m.Height - o.Y - o.H, W: o.W, H: o.H}
+			want := Obstacle{X: m.Width - o.X - o.W, Y: m.Height - o.Y - o.H, W: o.W, H: o.H, Kind: o.KindOrDefault()}
 			found := false
 			for _, q := range m.Obstacles {
-				if near(q.X, want.X) && near(q.Y, want.Y) && near(q.W, want.W) && near(q.H, want.H) {
+				if near(q.X, want.X) && near(q.Y, want.Y) && near(q.W, want.W) && near(q.H, want.H) &&
+					q.KindOrDefault() == want.Kind {
 					found = true
 					break
 				}
@@ -124,20 +177,111 @@ func TestMapSpawnsClearOfObstacles(t *testing.T) {
 
 // Нет сквозной линии: каждая горизонталь y = 20, 40, … и вертикаль x = 20, 40, …
 // от края до края пересекает хотя бы одно препятствие. Линии по самому краю
-// (y = 0, x = 0 …) не проверяются: это граница мира.
+// (y = 0, x = 0 …) не проверяются: это граница мира. Отдельно проверяются линии
+// через щели между ящиками — они проходят мимо самих ящиков и в сетку с шагом
+// 20 px могут не попасть.
 func TestMapNoClearLine(t *testing.T) {
 	forEachMap(t, func(t *testing.T, m Map) {
+		var ys, xs []float64
 		for y := mapLineStep; y < m.Height; y += mapLineStep {
+			ys = append(ys, y)
+		}
+		for x := mapLineStep; x < m.Width; x += mapLineStep {
+			xs = append(xs, x)
+		}
+		for _, s := range crateSlits(m) {
+			// Края полосы, по которым ещё проходит пуля, и её середина.
+			lines := []float64{s.Lo + mapBulletRadius, s.mid(), s.Hi - mapBulletRadius}
+			if s.Horizontal {
+				ys = append(ys, lines...)
+			} else {
+				xs = append(xs, lines...)
+			}
+		}
+		for _, y := range ys {
 			if !lineBlocked(m.Obstacles, y, func(o Obstacle) (float64, float64) { return o.Y, o.Y + o.H }) {
 				t.Errorf("горизонталь y=%v проходит через всю карту без укрытия", y)
 			}
 		}
-		for x := mapLineStep; x < m.Width; x += mapLineStep {
+		for _, x := range xs {
 			if !lineBlocked(m.Obstacles, x, func(o Obstacle) (float64, float64) { return o.X, o.X + o.W }) {
 				t.Errorf("вертикаль x=%v проходит через всю карту без укрытия", x)
 			}
 		}
 	})
+}
+
+// Щель между ящиками — линия прострела, но не проход: уже диаметра игрока,
+// шире диаметра пули; пуля вдоль щели не задевает ни один из двух ящиков,
+// а игрок в щели не помещается.
+func TestMapCrateSlitsShootableNotWalkable(t *testing.T) {
+	forEachMap(t, func(t *testing.T, m Map) {
+		w := NewWorld(Config{Map: m, PlayerRadius: mapPlayerRadius, BulletRadius: mapBulletRadius})
+		for _, s := range crateSlits(m) {
+			if g := s.width(); g >= 2*mapPlayerRadius-mapEps || g <= 2*mapBulletRadius+mapEps {
+				t.Errorf("щель %.1f px между %+v и %+v: нужно между %v и %v",
+					g, s.A, s.B, 2*mapBulletRadius, 2*mapPlayerRadius)
+				continue
+			}
+			for _, c := range []float64{s.Lo + mapBulletRadius + 0.5, s.mid(), s.Hi - mapBulletRadius - 0.5} {
+				from, to := Vec2{X: s.From - 50, Y: c}, Vec2{X: s.To + 50, Y: c}
+				if !s.Horizontal {
+					from, to = Vec2{X: c, Y: s.From - 50}, Vec2{X: c, Y: s.To + 50}
+				}
+				for _, o := range []Obstacle{s.A, s.B} {
+					if _, hit := segmentRectT(from, to, o, mapBulletRadius); hit {
+						t.Errorf("пуля %v → %v через щель задевает ящик %+v", from, to, o)
+					}
+				}
+			}
+			at := Vec2{X: (s.From + s.To) / 2, Y: s.mid()}
+			if !s.Horizontal {
+				at = Vec2{X: s.mid(), Y: (s.From + s.To) / 2}
+			}
+			if w.isFree(at) {
+				t.Errorf("игрок помещается в щель между %+v и %+v (точка %v)", s.A, s.B, at)
+			}
+		}
+	})
+}
+
+// На арене вместо колонн — четыре пары ящиков с щелью 16 px.
+func TestArenaCratePairs(t *testing.T) {
+	m := ArenaMap()
+	crates := 0
+	for _, o := range m.Obstacles {
+		if o.KindOrDefault() == ObstacleCrate {
+			crates++
+			if !near(o.W, 32) || !near(o.H, 32) {
+				t.Errorf("ящик %+v не 32×32", o)
+			}
+		}
+	}
+	slits := crateSlits(m)
+	if crates != 8 || len(slits) != 4 {
+		t.Fatalf("ящиков %d, щелей %d; нужно 8 и 4", crates, len(slits))
+	}
+	for _, s := range slits {
+		if !near(s.width(), 16) {
+			t.Errorf("щель между %+v и %+v шириной %.1f, нужно 16", s.A, s.B, s.width())
+		}
+	}
+}
+
+// Пуля, выпущенная вдоль щели ящиков в мире по умолчанию, пролетает пару насквозь.
+func TestBulletPassesCrateSlit(t *testing.T) {
+	cfg := testConfig()
+	cfg.Map = ArenaMap()
+	w := NewWorld(cfg)
+	s := crateSlits(cfg.Map)[0]
+	if !s.Horizontal {
+		t.Fatal("ожидалась горизонтальная щель")
+	}
+	from := Vec2{X: s.From - 30, Y: s.mid()}
+	to := Vec2{X: s.To + 30, Y: s.mid()}
+	if tw, hit := w.firstObstacleT(from, to); hit {
+		t.Fatalf("пуля %v → %v упёрлась в препятствие при t=%.2f", from, to, tw)
+	}
 }
 
 // lineBlocked — пересекает ли линия на координате v (по оси, заданной span)
@@ -196,6 +340,9 @@ func TestMapPassagesAreWalkable(t *testing.T) {
 	forEachMap(t, func(t *testing.T, m Map) {
 		for i, a := range m.Obstacles {
 			for _, b := range m.Obstacles[i+1:] {
+				if _, ok := crateSlit(a, b); ok {
+					continue // щель ящиков — не проход, см. TestMapCrateSlitsShootableNotWalkable
+				}
 				if d := rectDist(a, b); d < mapMinPassage-mapEps {
 					t.Errorf("проход %.1f px между %+v и %+v уже %v", d, a, b, mapMinPassage)
 				}
