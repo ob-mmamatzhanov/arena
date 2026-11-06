@@ -126,6 +126,86 @@ func TestPickupNeverSpawnsInObstacleOrNearPlayer(t *testing.T) {
 	}
 }
 
+// 20 последовательных спавнов (10 из общего потока и 10 ammo): центры любых
+// двух пикапов не ближе PickupMinPickupDist, до края мира — не ближе
+// PickupEdgeMargin. Оба потока проверяют дистанцию и к пикапам другого потока.
+func TestPickupSpawnsKeepDistanceFromEachOther(t *testing.T) {
+	for seed := uint64(1); seed <= 20; seed++ {
+		cfg := testConfig()
+		cfg.Seed = seed
+		cfg.Width, cfg.Height = 400, 400 // тесно: ограничение действительно срабатывает
+		cfg.PickupInterval, cfg.MaxPickups = dt, 10
+		cfg.AmmoPickupInterval, cfg.MaxAmmoPickups = dt, 10
+		cfg.PickupMinPickupDist, cfg.PickupEdgeMargin = 60, 50
+		w := NewWorld(cfg)
+
+		for i := 0; len(w.pickups) < 20; i++ {
+			if i == 200 {
+				t.Fatalf("seed %d: за %d тиков появилось лишь %d пикапов из 20", seed, i, len(w.pickups))
+			}
+			w.Update(dt, nil)
+		}
+		pks := w.Snapshot().Pickups
+		for i, a := range pks {
+			if a.Pos.X < 50 || a.Pos.X > cfg.Width-50 || a.Pos.Y < 50 || a.Pos.Y > cfg.Height-50 {
+				t.Errorf("seed %d: пикап %d в %v ближе 50 к краю мира", seed, a.ID, a.Pos)
+			}
+			for _, b := range pks[i+1:] {
+				if d := math.Hypot(a.Pos.X-b.Pos.X, a.Pos.Y-b.Pos.Y); d < 60 {
+					t.Errorf("seed %d: пикапы %d (%s) и %d (%s) в %.1f друг от друга, нужно ≥ 60",
+						seed, a.ID, a.Type, b.ID, b.Type, d)
+				}
+			}
+		}
+	}
+}
+
+// Отступ от края действует и на точки из зон карты: зона у самого края даёт
+// пикапы только в своей части, отстоящей от края на PickupEdgeMargin.
+func TestPickupZoneRespectsEdgeMargin(t *testing.T) {
+	cfg := testConfig()
+	cfg.PickupInterval, cfg.MaxPickups = dt, 1000
+	cfg.PickupEdgeMargin = 50
+	cfg.PickupZones = map[PickupType][]Zone{
+		PickupHealth: {RectZone(0, 0, 100, 100)},
+		PickupSpeed:  {RectZone(900, 900, 100, 100)},
+	}
+	w := NewWorld(cfg)
+	tickN(w, 200)
+	if len(w.pickups) == 0 {
+		t.Fatal("пикапы не появились")
+	}
+	for _, pk := range w.pickups {
+		p := pk.Pos
+		if p.X < 50 || p.X > cfg.Width-50 || p.Y < 50 || p.Y > cfg.Height-50 {
+			t.Errorf("пикап %s в %v ближе 50 к краю мира", pk.Type, p)
+		}
+	}
+}
+
+// Новый пикап не встаёт ближе PickupMinPickupDist к уже лежащему: единственное
+// свободное место занято — спавн ждёт, пока пикап не подберут.
+func TestPickupWaitsForDistanceFromOtherPickup(t *testing.T) {
+	cfg := testConfig()
+	cfg.PickupInterval, cfg.MaxPickups = 1, 10
+	cfg.PickupMinPickupDist = 60
+	cfg.PickupZones = map[PickupType][]Zone{
+		PickupHealth: {CircleZone(500, 500, 20)},
+		PickupSpeed:  {CircleZone(500, 500, 20)},
+	}
+	w := NewWorld(cfg)
+	dropPickup(w, PickupHealth, 500, 500)
+	tickN(w, 100) // 5 с, интервал 1 с
+	if len(w.pickups) != 1 {
+		t.Fatalf("пикапов %d, нужен 1: зона целиком ближе 60 к лежащему", len(w.pickups))
+	}
+	w.pickups = w.pickups[:0]
+	tickN(w, 1)
+	if len(w.pickups) != 1 {
+		t.Fatalf("после освобождения места пикапов %d, нужен 1", len(w.pickups))
+	}
+}
+
 func TestPickupWaitsForFreeSpot(t *testing.T) {
 	cfg := testConfig()
 	cfg.PickupInterval = 1

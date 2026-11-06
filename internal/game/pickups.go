@@ -160,25 +160,28 @@ func (w *World) countPickups(ammo bool) int {
 
 // pickupPoint ищет случайную точку для пикапа типа typ: в одной из его зон
 // карты (Map.PickupZones), а без зон — где угодно. Круг пикапа не задевает
-// препятствия и края мира, до центра любого игрока не меньше PickupMinPlayerDist.
+// препятствия; центр не ближе max(PickupRadius, PickupEdgeMargin) к краю мира,
+// не ближе PickupMinPlayerDist к центру любого игрока и не ближе
+// PickupMinPickupDist к центру любого лежащего пикапа (обоих потоков).
 func (w *World) pickupPoint(ids []PlayerID, typ PickupType) (Vec2, bool) {
 	r := w.cfg.PickupRadius
+	m := max(r, w.cfg.PickupEdgeMargin) // builtin max для float инлайнится, в отличие от math.Max
 	minD2 := w.cfg.PickupMinPlayerDist * w.cfg.PickupMinPlayerDist
 	zones := w.cfg.PickupZones[typ]
 	for range pickupAttempts {
 		var pos Vec2
 		if len(zones) > 0 {
 			pos = zones[w.rng.IntN(len(zones))].sample(w.rng)
-			if pos.X < r || pos.X > w.cfg.Width-r || pos.Y < r || pos.Y > w.cfg.Height-r {
+			if pos.X < m || pos.X > w.cfg.Width-m || pos.Y < m || pos.Y > w.cfg.Height-m {
 				continue
 			}
 		} else {
 			pos = Vec2{
-				X: r + w.rng.Float64()*(w.cfg.Width-2*r),
-				Y: r + w.rng.Float64()*(w.cfg.Height-2*r),
+				X: m + w.rng.Float64()*(w.cfg.Width-2*m),
+				Y: m + w.rng.Float64()*(w.cfg.Height-2*m),
 			}
 		}
-		if !w.circleFree(pos, r) {
+		if !w.circleFree(pos, r) || w.nearPickup(pos) {
 			continue
 		}
 		near := false
@@ -194,6 +197,20 @@ func (w *World) pickupPoint(ids []PlayerID, typ PickupType) (Vec2, bool) {
 		}
 	}
 	return Vec2{}, false
+}
+
+// nearPickup — лежит ли какой-либо пикап ближе PickupMinPickupDist к точке.
+func (w *World) nearPickup(pos Vec2) bool {
+	d := w.cfg.PickupMinPickupDist
+	if d <= 0 {
+		return false
+	}
+	for _, pk := range w.pickups {
+		if dx, dy := pos.X-pk.Pos.X, pos.Y-pk.Pos.Y; dx*dx+dy*dy < d*d {
+			return true
+		}
+	}
+	return false
 }
 
 // resetPickups — новый раунд: пикапы убираются, отсчёт до спавна начинается заново.

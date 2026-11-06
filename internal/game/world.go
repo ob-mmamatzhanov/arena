@@ -170,6 +170,8 @@ type Config struct {
 	MaxPickups          int     // одновременно на карте (без учёта ammo)
 	PickupRadius        float64
 	PickupMinPlayerDist float64 // минимальное расстояние от центра игрока при спавне
+	PickupMinPickupDist float64 // минимальное расстояние между центрами пикапов (≤ 0 — без ограничения)
+	PickupEdgeMargin    float64 // минимальное расстояние от центра пикапа до края мира (≤ 0 — только PickupRadius)
 	HealthAmount        int     // hp от пикапа health
 	SpeedMultiplier     float64 // множитель скорости от пикапа speed
 	SpeedDuration       float64 // секунды
@@ -213,6 +215,7 @@ func DefaultConfig() Config {
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
+		PickupMinPickupDist: 60, PickupEdgeMargin: 50,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
 		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10, AmmoPickupInterval: 5, MaxAmmoPickups: 2,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
