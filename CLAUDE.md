@@ -10,14 +10,17 @@ go test -race ./...                                    # room/net конкуре
 go test ./internal/game -run TestDashImpulse -v        # отдельный тест
 go test ./internal/game -run '^$' -bench BenchmarkUpdate8Players100Bullets -benchmem
 go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, health на GET /healthz
+go test ./internal/game -run TestPrintMap -v           # ASCII-схема карты: '#' стена, 'x' ящик, 'S' спавн
 ```
+
+**Push в `master` = деплой в прод.** `.github/workflows/deploy.yml` на каждый push в `master` гоняет `go vet` + `go test -race` и затем `flyctl deploy` (приложение `arena-ob`, `fly.toml`). Разрешённые `Origin` продакшена заданы дважды — в `CMD` у `Dockerfile` и в `[processes]` у `fly.toml`; менять нужно оба.
 
 **gofmt на Windows:** включён `core.autocrlf=true`, поэтому в рабочей копии файлы с CRLF и `gofmt -l` помечает вообще все файлы. Проверять форматирование, игнорируя `\r`:
 `for f in $(git ls-files -m -o --exclude-standard '*.go'); do tr -d '\r' < $f | gofmt -d; done`
 
 **`-race` на Windows** требует cgo и C-компилятора, иначе сборка падает на `# runtime/cgo: C compiler "gcc" not found`. Поставлен WinLibs MinGW-w64 (`winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT`), в `go env` выставлено `CGO_ENABLED=1`. После установки GoLand нужно перезапустить, чтобы он подхватил новый PATH.
 
-`python` на этой машине — заглушка из Microsoft Store, не использовать её для скриптовых правок.
+`python` на этой машине — заглушка из Microsoft Store, не использовать её для скриптовых правок. Для разовых расчётов (подбор координат на карте и т. п.) удобен временный `internal/game/zz_tmp_test.go`: из него доступны неэкспортированные `segmentRectT`, `pointRectDist`, `circleFree`; запуск через `-run … -v` и `t.Log`, после — удалить файл.
 
 ## Архитектура
 
@@ -25,11 +28,17 @@ go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, hea
 
 Три слоя со строгим направлением зависимостей `room → game`, `room → net`; **`game` и `net` ничего не знают друг о друге**:
 
-- **`internal/game`** — чистая симуляция, без I/O, без горутин, не потокобезопасна. `World.Update(dt, inputs)` продвигает один тик; `World.Snapshot()` — чистое чтение, возвращающее копии. Все настройки живут в `Config` (`DefaultConfig()` — продакшен). Механики разнесены по файлам: `world.go` (движение, препятствия, пули, раунды, перегрев), `pickups.go`, `dash.go`, `events.go`.
+- **`internal/game`** — чистая симуляция, без I/O, без горутин, не потокобезопасна. `World.Update(dt, inputs)` продвигает один тик; `World.Snapshot()` — чистое чтение, возвращающее копии. Все настройки живут в `Config` (`DefaultConfig()` — продакшен). Механики разнесены по файлам: `world.go` (движение, препятствия, пули, раунды, перегрев), `pickups.go`, `dash.go`, `events.go`, `maps.go`.
 - **`internal/net`** — протокол обмена (`protocol.go`: JSON-типы `Input`, `Welcome`, `Snapshot`, `Event` …) и `Conn`, обёртка над WebSocket, где в сокет пишет только `WritePump`, а все остальные кладут в очередь через неблокирующий `TrySend`.
 - **`internal/room`** — единственное место, где оба слоя встречаются. `Room` — это **одна горутина** (`Run`), владеющая миром, клиентами и буферами ввода; снаружи с ней общаются только через каналы `join`/`leave`/`inputs`, поэтому мьютексов нет. Мир мутируется только в `tick()`. `broadcast` конвертирует `game.Snapshot` → `net.Snapshot`, маршалит один раз и выбрасывает клиентов, у которых очередь отправки переполнена.
 
 На каждое соединение (`room/handler.go`): accept → `Room.Join` (Welcome кладётся в очередь до возврата из Join) → горутина `WritePump` + блокирующий `ReadPump` → `Leave`. Подключения и отключения применяются на следующем тике.
+
+### Карты
+
+`Map` (`maps.go`) встроен в `Config`, поэтому `cfg.Width`, `cfg.Obstacles`, `cfg.Spawns`, `cfg.PickupZones` читаются напрямую; `DefaultMap()` = `ArenaMap()` (800×600). Мир читает только поля `Map`, так что новая карта — это новая функция без правок в `world.go`/`pickups.go`. Пустые `Spawns` / зоны типа — старое поведение (случайная свободная точка). `Obstacle.Kind` (`brick`/`crate`) — только для отрисовки на клиенте, на симуляцию не влияет; пустой `Kind` означает `brick` (`KindOrDefault()`), в `Welcome` поле всегда заполнено.
+
+Принципы карты описаны в комментарии к `ArenaMap` и проверяются в `maps_test.go` для каждой карты из `allMaps()` (новую карту добавлять туда): поворотная симметрия 180° (с учётом `Kind`), препятствия не пересекаются, проходы ≥ 32 px либо вплотную к краю (исключение — щель между двумя выровненными ящиками уже диаметра игрока, но шире пули: линия прострела, не проход), связность свободного пространства, укрытие рядом, спавны скрыты от центра и разнесены, зоны пикапов целиком не ближе `PickupEdgeMargin` к краю. Тесты с `DefaultConfig()`/`DefaultMap()` (например, `killOnce` в `rounds_test.go`) ставят игроков в конкретные координаты — после правки геометрии карты они могут попасть в стену.
 
 ### Добавление поля в протокол
 
@@ -38,8 +47,8 @@ go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, hea
 ## Инварианты, на которые опирается код
 
 - **Детерминизм.** Вся случайность берётся из `World.rng` (сид из `Config.Seed`; комната сидит от времени) — никогда из глобального `rand`. Всё, что потребляет rng или порождает события, обходит игроков в порядке `sortedIDs()`, а не в порядке map. Тесты на это завязаны.
-- **Ноль аллокаций в `Update`** (бенчмарк показывает `0 allocs/op`): слайсы (`bullets`, `pickups`, `events`, `ids`) переиспользуются через `s[:0]` и фильтруются на месте. Горячие пути избегают `math.Hypot`/`math.Min`/`math.Max` (не инлайнятся на amd64) — сравниваются квадраты расстояний и используется локальный `clamp`.
-- **Значение конфига ≤ 0 выключает механику** (`RoundTime`, `KillLimit`, `PickupInterval`, `DashDuration`, `MaxAmmo`, `RespawnDelay`, `InvulnTime`). `testConfig()` в `world_test.go` держит раунды, спавн пикапов, патроны, задержку респауна и неуязвимость выключенными, чтобы не задевать несвязанные тесты — включать их нужно отдельно в каждом тесте.
+- **Ноль аллокаций в `Update`** (бенчмарк показывает `0 allocs/op`): слайсы (`bullets`, `pickups`, `events`, `ids`) переиспользуются через `s[:0]` и фильтруются на месте. Горячие пути избегают `math.Hypot`/`math.Min`/`math.Max` (не инлайнятся на amd64) — сравниваются квадраты расстояний и используется локальный `clamp`; встроенные `min`/`max` допустимы.
+- **Значение конфига ≤ 0 выключает механику** (`RoundTime`, `KillLimit`, `PickupInterval`, `AmmoPickupInterval`, `PickupMinPickupDist`, `PickupEdgeMargin`, `DashDuration`, `MaxAmmo`, `RespawnDelay`, `InvulnTime`). `testConfig()` в `world_test.go` (карта 1000×1000 без препятствий) держит раунды, спавн пикапов, патроны, задержку респауна, неуязвимость и ограничения расстановки пикапов выключенными, чтобы не задевать несвязанные тесты — включать их нужно отдельно в каждом тесте.
 - **Вещественные таймеры** сравниваются с `timeEps`, контактные расстояния — с `contactEps`; точное `==` на накопленном `dt` ломается.
 - **События** (`Snapshot.Events`) сбрасываются в начале каждого `Update`, поэтому каждое событие попадает ровно в один снапшот тика. `net.Event.MarshalJSON` пишет только поля своего типа (без `omitempty` на числах: 0 — валидная координата/ID).
 - **Перерыв между раундами замораживает мир**: ввод отбрасывается целиком (`LastSeq` не растёт); работает только таймер фазы. `startRound` сбрасывает пораундовое состояние игроков — новое состояние игрока нужно сбрасывать там же.
@@ -50,4 +59,5 @@ go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, hea
 
 - Комментарии в коде, сообщения тестов и тела коммит-сообщений — на русском; заголовки коммитов — на английском.
 - Каждая механика идёт отдельным коммитом вместе со своими тестами; каждый коммит должен сам по себе проходить build/vet/test.
-- Тики в тестах: `dt = 0.05`; хелперы `place`, `tickN`, `fireOnce`, `runCollectHits`, `hitsOf`, `dropPickup` лежат в `_test.go` файлах `internal/game`.
+- Тики в тестах: `dt = 0.05`; хелперы `place`, `tickN`, `fireOnce`, `killOnce`, `runCollectHits`, `hitsOf`, `dropPickup` лежат в `_test.go` файлах `internal/game`; для карт — `forEachMap`, `freeCells`, `crateSlits` в `maps_test.go`.
+- Новое ограничение в тесте стоит проверить на «ловит ли он»: временно откатить механику (или `git stash` файла карты) и убедиться, что тест падает.
