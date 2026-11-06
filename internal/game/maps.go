@@ -156,10 +156,11 @@ func ArenaMap() Map {
 			PickupHealth: {CircleZone(w/2, h/2, 150)},
 			// Патроны — у боковых упоров.
 			PickupAmmo: {RectZone(55, 240, 40, 120), RectZone(705, 240, 40, 120)},
-			// Ускорение — в углах.
+			// Ускорение — в углах, целиком не ближе PickupEdgeMargin (50) к краю:
+			// иначе часть зоны была бы недоступна для спавна.
 			PickupSpeed: {
-				RectZone(15, 15, 70, 70), RectZone(715, 15, 70, 70),
-				RectZone(15, 515, 70, 70), RectZone(715, 515, 70, 70),
+				RectZone(50, 50, 50, 50), RectZone(700, 50, 50, 50),
+				RectZone(50, 500, 50, 50), RectZone(700, 500, 50, 50),
 			},
 		},
 	}

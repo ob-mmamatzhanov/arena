@@ -406,8 +406,18 @@ func TestMapFreeSpaceConnected(t *testing.T) {
 func TestMapPickupZonesHaveRoom(t *testing.T) {
 	forEachMap(t, func(t *testing.T, m Map) {
 		w := NewWorld(Config{Map: m, PickupRadius: 10, Seed: 1})
+		margin := DefaultConfig().PickupEdgeMargin
 		for typ, zones := range m.PickupZones {
 			for i, z := range zones {
+				// Зона целиком не ближе PickupEdgeMargin к краю: иначе часть её
+				// площади отбрасывается при спавне и зона фактически меньше.
+				x0, y0, x1, y1 := z.X, z.Y, z.X+z.W, z.Y+z.H
+				if z.R > 0 {
+					x0, y0, x1, y1 = z.X-z.R, z.Y-z.R, z.X+z.R, z.Y+z.R
+				}
+				if x0 < margin-mapEps || y0 < margin-mapEps || x1 > m.Width-margin+mapEps || y1 > m.Height-margin+mapEps {
+					t.Errorf("%s зона %d %+v ближе %v к краю карты", typ, i, z, margin)
+				}
 				ok := 0
 				for range 200 {
 					p := z.sample(w.rng)
