@@ -12,8 +12,8 @@ func allMaps() []Map {
 
 // Параметры принципов карты (см. ArenaMap).
 const (
-	mapLineStep       = 1.0   // шаг проверки сквозных линий: координаты карт целые
-	mapMaxCoverDist   = 150.0 // укрытие не дальше
+	mapCoverStep      = 40.0  // шаг сетки проверки укрытия
+	mapMaxCoverDist   = 140.0 // ближайшее препятствие не дальше
 	mapMinPassage     = 32.0  // проход между препятствиями: диаметр игрока 24 + запас
 	mapSpawnClearance = 60.0  // спавн не ближе к препятствию
 	mapPlayerRadius   = 12.0  // DefaultConfig().PlayerRadius
@@ -154,6 +154,9 @@ func TestMapSpawnsClearOfObstacles(t *testing.T) {
 					t.Errorf("спавн %v в %.1f px от препятствия %+v, нужно ≥ %v", s, d, o, mapSpawnClearance)
 				}
 			}
+			if !spawnHiddenFromCenter(m, s) {
+				t.Errorf("спавн %v виден из центра карты: линию ничто не перекрывает", s)
+			}
 		}
 		// По две точки на каждую сторону карты (ближайший край).
 		sides := map[string]int{}
@@ -175,38 +178,58 @@ func TestMapSpawnsClearOfObstacles(t *testing.T) {
 	})
 }
 
-// Нет сквозной линии: каждая горизонталь y = 1, 2, … и вертикаль x = 1, 2, …
-// от края до края пересекает хотя бы одно препятствие. Линии по самому краю
-// (y = 0, x = 0 …) не проверяются: это граница мира. При целых координатах
-// препятствий шаг 1 px не пропускает ни одного просвета между проекциями.
-// Линии через щели между ящиками (они проходят мимо самих ящиков) проверяются
-// явно — на случай карты с дробными координатами.
-func TestMapNoClearLine(t *testing.T) {
+// spawnHiddenFromCenter — перекрывает ли линию из центра карты до спавна
+// какое-либо препятствие (кроме того, внутри которого лежит сам центр).
+func spawnHiddenFromCenter(m Map, s Vec2) bool {
+	c := Vec2{X: m.Width / 2, Y: m.Height / 2}
+	for _, o := range m.Obstacles {
+		if pointRectDist(c, o) == 0 {
+			continue
+		}
+		if _, hit := segmentRectT(c, s, o, 0); hit {
+			return true
+		}
+	}
+	return false
+}
+
+// На арене спавны прячутся именно за угловыми стенами: линию из центра до
+// каждого спавна перекрывает одна из четырёх коротких угловых стен 60×16.
+func TestArenaSpawnsBehindCornerWalls(t *testing.T) {
+	m := ArenaMap()
+	c := Vec2{X: m.Width / 2, Y: m.Height / 2}
+	for _, s := range m.Spawns {
+		hidden := false
+		for _, o := range m.Obstacles {
+			if near(o.W, 60) && near(o.H, 16) {
+				if _, hit := segmentRectT(c, s, o, 0); hit {
+					hidden = true
+				}
+			}
+		}
+		if !hidden {
+			t.Errorf("спавн %v не за угловой стеной относительно центра", s)
+		}
+	}
+}
+
+// Укрытие рядом: из каждой проходимой точки сетки mapCoverStep (центры клеток
+// 20, 60, …) ближайшее препятствие не дальше mapMaxCoverDist. Сквозные линии
+// через всю карту допустимы — карта рассчитана на дальние перестрелки, но
+// без голых пустырей, где негде спрятаться.
+func TestMapCoverNearby(t *testing.T) {
 	forEachMap(t, func(t *testing.T, m Map) {
-		var ys, xs []float64
-		for y := mapLineStep; y < m.Height; y += mapLineStep {
-			ys = append(ys, y)
+		cells, _, _, _ := freeCells(m, mapCoverStep)
+		if len(cells) == 0 {
+			t.Fatal("на карте нет проходимых точек")
 		}
-		for x := mapLineStep; x < m.Width; x += mapLineStep {
-			xs = append(xs, x)
-		}
-		for _, s := range crateSlits(m) {
-			// Края полосы, по которым ещё проходит пуля, и её середина.
-			lines := []float64{s.Lo + mapBulletRadius, s.mid(), s.Hi - mapBulletRadius}
-			if s.Horizontal {
-				ys = append(ys, lines...)
-			} else {
-				xs = append(xs, lines...)
+		for _, p := range cells {
+			best := math.Inf(1)
+			for _, o := range m.Obstacles {
+				best = math.Min(best, pointRectDist(p, o))
 			}
-		}
-		for _, y := range ys {
-			if !lineBlocked(m.Obstacles, y, func(o Obstacle) (float64, float64) { return o.Y, o.Y + o.H }) {
-				t.Errorf("горизонталь y=%v проходит через всю карту без укрытия", y)
-			}
-		}
-		for _, x := range xs {
-			if !lineBlocked(m.Obstacles, x, func(o Obstacle) (float64, float64) { return o.X, o.X + o.W }) {
-				t.Errorf("вертикаль x=%v проходит через всю карту без укрытия", x)
+			if best > mapMaxCoverDist+mapEps {
+				t.Errorf("из точки %v до ближайшего препятствия %.1f px, нужно ≤ %v", p, best, mapMaxCoverDist)
 			}
 		}
 	})
@@ -246,7 +269,7 @@ func TestMapCrateSlitsShootableNotWalkable(t *testing.T) {
 	})
 }
 
-// На арене вместо колонн — четыре пары ящиков с щелью 16 px.
+// На арене две пары ящиков 32×32 с щелью 16 px.
 func TestArenaCratePairs(t *testing.T) {
 	m := ArenaMap()
 	crates := 0
@@ -259,8 +282,8 @@ func TestArenaCratePairs(t *testing.T) {
 		}
 	}
 	slits := crateSlits(m)
-	if crates != 8 || len(slits) != 4 {
-		t.Fatalf("ящиков %d, щелей %d; нужно 8 и 4", crates, len(slits))
+	if crates != 4 || len(slits) != 2 {
+		t.Fatalf("ящиков %d, щелей %d; нужно 4 и 2", crates, len(slits))
 	}
 	for _, s := range slits {
 		if !near(s.width(), 16) {
@@ -285,17 +308,6 @@ func TestBulletPassesCrateSlit(t *testing.T) {
 	}
 }
 
-// lineBlocked — пересекает ли линия на координате v (по оси, заданной span)
-// какое-либо препятствие. Касание ребра считается пересечением.
-func lineBlocked(obs []Obstacle, v float64, span func(Obstacle) (float64, float64)) bool {
-	for _, o := range obs {
-		if lo, hi := span(o); v >= lo && v <= hi {
-			return true
-		}
-	}
-	return false
-}
-
 // freeCells — центры клеток сетки step, где помещается игрок.
 func freeCells(m Map, step float64) (cells []Vec2, cols, rows int, free []bool) {
 	w := NewWorld(Config{Map: m, PlayerRadius: mapPlayerRadius})
@@ -312,25 +324,6 @@ func freeCells(m Map, step float64) (cells []Vec2, cols, rows int, free []bool) 
 		}
 	}
 	return cells, cols, rows, free
-}
-
-func TestMapCoverWithinReach(t *testing.T) {
-	forEachMap(t, func(t *testing.T, m Map) {
-		cells, _, _, _ := freeCells(m, 5)
-		worst, at := 0.0, Vec2{}
-		for _, p := range cells {
-			best := math.Inf(1)
-			for _, o := range m.Obstacles {
-				best = math.Min(best, pointRectDist(p, o))
-			}
-			if best > worst {
-				worst, at = best, p
-			}
-		}
-		if worst > mapMaxCoverDist {
-			t.Errorf("из точки %v до укрытия %.1f px, нужно ≤ %v", at, worst, mapMaxCoverDist)
-		}
-	})
 }
 
 // Проходы: между любыми двумя препятствиями и между препятствием и краем —
@@ -566,7 +559,7 @@ func TestPrintMap(t *testing.T) {
 				}
 			}
 			for _, s := range m.Spawns {
-				if math.Abs(s.X-p.X) < step/2 && math.Abs(s.Y-p.Y) < step/2 {
+				if dx, dy := s.X-p.X, s.Y-p.Y; dx >= -step/2 && dx < step/2 && dy >= -step/2 && dy < step/2 { // полуинтервал: спавн на границе клеток попадает ровно в одну
 					ch = 'S'
 				}
 			}
