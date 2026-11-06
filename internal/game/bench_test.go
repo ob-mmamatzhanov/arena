@@ -15,7 +15,7 @@ func BenchmarkUpdate8Players100Bullets(b *testing.B) {
 		obstacles []Obstacle
 	}{
 		{"obstacles=0", nil},
-		{"obstacles=6", DefaultObstacles()},
+		{"obstacles=default", DefaultMap().Obstacles},
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			cfg := DefaultConfig()

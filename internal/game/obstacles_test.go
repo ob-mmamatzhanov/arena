@@ -12,18 +12,6 @@ func worldWithObstacles(t *testing.T, obs ...Obstacle) *World {
 	return NewWorld(cfg)
 }
 
-func TestDefaultSpawnPointsAreFree(t *testing.T) {
-	w := NewWorld(DefaultConfig())
-	if n := len(w.cfg.Obstacles); n < 4 || n > 6 {
-		t.Fatalf("default map has %d obstacles, want 4–6", n)
-	}
-	for id := PlayerID(0); id < 8; id++ { // все 8 слотов окружности
-		if p := w.spawnPoint(id); !w.isFree(p) {
-			t.Errorf("spawn slot %d at %v overlaps an obstacle", id, p)
-		}
-	}
-}
-
 func TestPlayerCannotEnterObstacle(t *testing.T) {
 	wall := Obstacle{X: 500, Y: 300, W: 40, H: 400}
 	w := worldWithObstacles(t, wall)

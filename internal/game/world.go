@@ -138,10 +138,13 @@ type Snapshot struct {
 
 // Config — параметры мира.
 type Config struct {
-	Width, Height float64
-	PlayerSpeed   float64 // единиц в секунду
-	PlayerRadius  float64 // радиус тела: коллизии с краями мира и препятствиями
-	HitRadius     float64 // радиус хитбокса игрока для попаданий пуль
+	// Map — размеры, препятствия, спавны и зоны пикапов. Встроена, поэтому
+	// cfg.Width, cfg.Obstacles и т. д. доступны напрямую.
+	Map
+
+	PlayerSpeed  float64 // единиц в секунду
+	PlayerRadius float64 // радиус тела: коллизии с краями мира и препятствиями
+	HitRadius    float64 // радиус хитбокса игрока для попаданий пуль
 
 	BulletSpeed    float64 // единиц в секунду
 	BulletRadius   float64
@@ -155,10 +158,6 @@ type Config struct {
 	HeatPerShot float64
 	HeatDecay   float64 // в секунду
 	MaxSpread   float64 // радианы при heat = 1
-
-	// Obstacles — статические препятствия карты, непроходимые для игроков и пуль.
-	// Срез не меняется после создания мира.
-	Obstacles []Obstacle
 
 	// Раунды. RoundTime ≤ 0 отключает лимит времени, KillLimit ≤ 0 — лимит фрагов
 	// (оба отключены — раунд бесконечен).
@@ -205,32 +204,13 @@ type Config struct {
 	Seed uint64
 }
 
-// Obstacle — прямоугольник карты: левый верхний угол (X, Y), ширина W, высота H.
-type Obstacle struct {
-	X, Y, W, H float64
-}
-
-// DefaultObstacles — карта 1000×1000: центральный блок, четыре угловые плиты
-// и стенка. Расставлены между точками спавна (кольцо радиусом 333 вокруг
-// центра) — TestDefaultSpawnPointsAreFree проверяет, что ни одна не перекрыта.
-func DefaultObstacles() []Obstacle {
-	return []Obstacle{
-		{X: 440, Y: 440, W: 120, H: 120}, // центр
-		{X: 100, Y: 100, W: 100, H: 40},  // углы
-		{X: 800, Y: 100, W: 100, H: 40},
-		{X: 100, Y: 860, W: 100, H: 40},
-		{X: 800, Y: 860, W: 100, H: 40},
-		{X: 680, Y: 300, W: 20, H: 120}, // стенка справа сверху
-	}
-}
-
 // DefaultConfig — разумные значения по умолчанию.
 func DefaultConfig() Config {
 	return Config{
-		Width: 1000, Height: 1000, PlayerSpeed: 200, PlayerRadius: 12, HitRadius: 12,
+		Map:         DefaultMap(),
+		PlayerSpeed: 200, PlayerRadius: 12, HitRadius: 12,
 		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
-		Obstacles: DefaultObstacles(),
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
@@ -831,11 +811,39 @@ func (w *World) Snapshot() Snapshot {
 	}
 }
 
-// spawnSlots — число фиксированных точек спавна на окружности.
+// spawnSlots — число фиксированных точек спавна на окружности (для карты без Spawns).
 const spawnSlots = 8
 
-// spawnPoint раскладывает игроков по окружности вокруг центра арены.
-func (w *World) spawnPoint(id PlayerID) Vec2 { return w.spawnSlot(uint32(id)) }
+// spawnPoint — точка входа игрока. На карте со спавнами — спавн номер id
+// по модулю их числа, а если там уже стоит живой игрок — следующий свободный.
+// Без спавнов — окружность вокруг центра арены.
+func (w *World) spawnPoint(id PlayerID) Vec2 {
+	n := len(w.cfg.Spawns)
+	if n == 0 {
+		return w.spawnSlot(uint32(id))
+	}
+	for i := range n {
+		p := w.cfg.Spawns[(int(id)+i)%n]
+		if !w.spawnOccupied(p, id) {
+			return p
+		}
+	}
+	return w.cfg.Spawns[int(id)%n]
+}
+
+// spawnOccupied — стоит ли у точки p живой игрок (кроме self): тела бы перекрылись.
+func (w *World) spawnOccupied(p Vec2, self PlayerID) bool {
+	d := 2 * w.cfg.PlayerRadius
+	for id, q := range w.players {
+		if id == self || q.dead() {
+			continue
+		}
+		if dx, dy := q.Pos.X-p.X, q.Pos.Y-p.Y; dx*dx+dy*dy < d*d {
+			return true
+		}
+	}
+	return false
+}
 
 // spawnSlot — точка спавна номер slot (по модулю spawnSlots).
 func (w *World) spawnSlot(slot uint32) Vec2 {
@@ -867,6 +875,9 @@ func (w *World) respawnPoint(id, killer PlayerID) Vec2 {
 		dx, dy := p.X-avoid.X, p.Y-avoid.Y
 		return dx*dx+dy*dy >= minD2
 	}
+	if len(w.cfg.Spawns) > 0 {
+		return w.mapRespawnPoint(id, avoid, farEnough)
+	}
 
 	lo, hi := w.bounds()
 	for range respawnAttempts {
@@ -886,6 +897,30 @@ func (w *World) respawnPoint(id, killer PlayerID) Vec2 {
 		}
 	}
 	return w.spawnPoint(id)
+}
+
+// mapRespawnPoint — респаун на карте со спавнами: случайный спавн, достаточно
+// далёкий от убийцы и не занятый живым игроком. Если таких нет — самый далёкий
+// от убийцы. Кандидаты перебираются в порядке среза, rng — один бросок: симуляция
+// воспроизводима.
+func (w *World) mapRespawnPoint(id PlayerID, avoid Vec2, farEnough func(Vec2) bool) Vec2 {
+	var cand [16]int // спавнов на карте немного; при большем числе append вырастит срез
+	ok := cand[:0]
+	for i, p := range w.cfg.Spawns {
+		if farEnough(p) && !w.spawnOccupied(p, id) {
+			ok = append(ok, i)
+		}
+	}
+	if len(ok) > 0 {
+		return w.cfg.Spawns[ok[w.rng.IntN(len(ok))]]
+	}
+	best, bestD2 := w.cfg.Spawns[0], -1.0
+	for _, p := range w.cfg.Spawns {
+		if dx, dy := p.X-avoid.X, p.Y-avoid.Y; dx*dx+dy*dy > bestD2 {
+			best, bestD2 = p, dx*dx+dy*dy
+		}
+	}
+	return best
 }
 
 // bounds — допустимый диапазон центра игрока: [0, Width]×[0, Height] с отступом

@@ -130,7 +130,16 @@ func findPlayer(s anet.Snapshot, id uint32) (anet.PlayerState, bool) {
 
 func startRoom(t *testing.T) (*Room, context.CancelFunc) {
 	t.Helper()
+	return startRoomWith(t, nil)
+}
+
+// startRoomWith — комната с миром на конфиге cfg (nil — DefaultConfig).
+func startRoomWith(t *testing.T, cfg *game.Config) (*Room, context.CancelFunc) {
+	t.Helper()
 	rm := New("test", slog.New(slog.DiscardHandler))
+	if cfg != nil {
+		rm.world = game.NewWorld(*cfg) // до Run: мир ещё не принадлежит горутине комнаты
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go rm.Run(ctx)
 	t.Cleanup(func() {
@@ -242,7 +251,11 @@ func TestInputsAppliedInTick(t *testing.T) {
 }
 
 func TestFireProducesBulletsAndHits(t *testing.T) {
-	rm, _ := startRoom(t)
+	// Открытая карта: на карте по умолчанию спавны намеренно за укрытиями,
+	// и прямой линии между первыми двумя игроками нет. Тест — про выстрел и попадание.
+	cfg := game.DefaultConfig()
+	cfg.Map = game.Map{Name: "open", Width: 800, Height: 600}
+	rm, _ := startRoomWith(t, &cfg)
 	ca, cb := newFakeClient(1024), newFakeClient(1024)
 	a, b := join(t, rm, ca), join(t, rm, cb)
 	// Ждём конца неуязвимости b после входа: иначе пули гасли бы без урона.

@@ -133,13 +133,14 @@ func (w *World) spawnStream(dt float64, ids []PlayerID, timer, interval float64,
 	if w.countPickups(ammo) >= limit {
 		return interval
 	}
-	pos, ok := w.pickupPoint(ids)
-	if !ok {
-		return timer
-	}
+	// Тип — до точки: от него зависит зона спавна. Порядок бросков rng важен.
 	typ := PickupAmmo
 	if !ammo {
-		typ = w.randomPickupType() // после pickupPoint — порядок бросков rng важен
+		typ = w.randomPickupType()
+	}
+	pos, ok := w.pickupPoint(ids, typ)
+	if !ok {
+		return timer // тип перебросится на следующей попытке
 	}
 	w.nextPickup++
 	w.pickups = append(w.pickups, Pickup{ID: w.nextPickup, Type: typ, Pos: pos})
@@ -157,15 +158,25 @@ func (w *World) countPickups(ammo bool) int {
 	return n
 }
 
-// pickupPoint ищет случайную точку, где круг пикапа не задевает препятствия,
-// а до центра любого игрока не меньше PickupMinPlayerDist.
-func (w *World) pickupPoint(ids []PlayerID) (Vec2, bool) {
+// pickupPoint ищет случайную точку для пикапа типа typ: в одной из его зон
+// карты (Map.PickupZones), а без зон — где угодно. Круг пикапа не задевает
+// препятствия и края мира, до центра любого игрока не меньше PickupMinPlayerDist.
+func (w *World) pickupPoint(ids []PlayerID, typ PickupType) (Vec2, bool) {
 	r := w.cfg.PickupRadius
 	minD2 := w.cfg.PickupMinPlayerDist * w.cfg.PickupMinPlayerDist
+	zones := w.cfg.PickupZones[typ]
 	for range pickupAttempts {
-		pos := Vec2{
-			X: r + w.rng.Float64()*(w.cfg.Width-2*r),
-			Y: r + w.rng.Float64()*(w.cfg.Height-2*r),
+		var pos Vec2
+		if len(zones) > 0 {
+			pos = zones[w.rng.IntN(len(zones))].sample(w.rng)
+			if pos.X < r || pos.X > w.cfg.Width-r || pos.Y < r || pos.Y > w.cfg.Height-r {
+				continue
+			}
+		} else {
+			pos = Vec2{
+				X: r + w.rng.Float64()*(w.cfg.Width-2*r),
+				Y: r + w.rng.Float64()*(w.cfg.Height-2*r),
+			}
 		}
 		if !w.circleFree(pos, r) {
 			continue

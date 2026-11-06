@@ -18,8 +18,9 @@ func tickN(w *World, n int) {
 // killOnce: игрок 1 убивает игрока 2 одним выстрелом (2 стоит в 200 правее).
 func killOnce(t *testing.T, w *World) {
 	t.Helper()
+	// Линия y = 500, x 100…220 свободна и на карте по умолчанию (DefaultMap).
 	place(w, 1, 100, 500)
-	place(w, 2, 300, 500)
+	place(w, 2, 220, 500)
 	w.players[2].HP = w.cfg.BulletDamage
 	seq, score := w.players[1].LastSeq, w.players[1].Score
 	w.Update(dt, map[PlayerID]Input{1: {Seq: seq + 1, Fire: true}})
@@ -139,7 +140,7 @@ func TestIntermissionFreezesWorld(t *testing.T) {
 
 func TestRestartResetsRound(t *testing.T) {
 	cfg := roundConfig(120, 1)
-	cfg.Obstacles = DefaultObstacles()
+	cfg.Map = DefaultMap() // препятствия и спавны: рестарт не ставит игроков в стены
 	w := NewWorld(cfg)
 	w.AddPlayer(1)
 	w.AddPlayer(2)

@@ -10,7 +10,8 @@ const eps = 1e-9
 
 func testConfig() Config {
 	return Config{
-		Width: 1000, Height: 1000, PlayerSpeed: 100, PlayerRadius: 10, HitRadius: 12,
+		Map:         Map{Width: 1000, Height: 1000},
+		PlayerSpeed: 100, PlayerRadius: 10, HitRadius: 12,
 		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
 		// Спавн пикапов выключен (PickupInterval = 0), параметры — для тестов подбора.
@@ -261,7 +262,7 @@ func TestPlayerStaysInsideWorld(t *testing.T) {
 	// Включая неквадратный мир 800×600: спавн и движение не должны выходить за его края.
 	for _, cfg := range []Config{
 		testConfig(),
-		{Width: 800, Height: 600, PlayerSpeed: 200, PlayerRadius: 16},
+		{Map: Map{Width: 800, Height: 600}, PlayerSpeed: 200, PlayerRadius: 16},
 	} {
 		for _, d := range dirs {
 			w := NewWorld(cfg)
