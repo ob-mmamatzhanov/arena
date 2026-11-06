@@ -533,20 +533,26 @@ func isMapSpawn(m Map, p Vec2) bool {
 }
 
 // Карта в текстовом виде — для отладки: go test -run TestPrintMap -v.
+// Клетка 10×10 px; символ — по тому, что лежит в центре клетки:
+// '#' — стена, 'x' — ящик, 'S' — спавн. Клетка мельче щели между ящиками
+// (16 px), поэтому щель видна.
 func TestPrintMap(t *testing.T) {
 	if !testing.Verbose() {
 		t.Skip("только с -v")
 	}
 	m := ArenaMap()
-	const step = 20
+	const step = 10
 	for y := step / 2; y < int(m.Height); y += step {
 		line := make([]byte, 0, int(m.Width)/step)
 		for x := step / 2; x < int(m.Width); x += step {
 			p := Vec2{X: float64(x), Y: float64(y)}
 			ch := byte('.')
 			for _, o := range m.Obstacles {
-				if pointRectDist(p, o) < step/2 {
+				if p.X > o.X && p.X < o.X+o.W && p.Y > o.Y && p.Y < o.Y+o.H {
 					ch = '#'
+					if o.KindOrDefault() == ObstacleCrate {
+						ch = 'x'
+					}
 				}
 			}
 			for _, s := range m.Spawns {
