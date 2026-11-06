@@ -16,7 +16,7 @@ const (
 	mapMaxCoverDist    = 140.0 // ближайшее препятствие не дальше
 	mapMinPassage      = 32.0  // проход между препятствиями: диаметр игрока 24 + запас
 	mapSpawnClearance  = 60.0  // спавн не ближе к препятствию
-	mapSpawnSeparation = 60.0  // спавны не ближе друг к другу
+	mapSpawnSeparation = 90.0  // спавны не ближе друг к другу
 	mapPlayerRadius    = 12.0  // DefaultConfig().PlayerRadius
 	mapBulletRadius    = 3.0   // DefaultConfig().BulletRadius
 	mapEps             = 1e-9
@@ -203,14 +203,14 @@ func spawnHiddenFromCenter(m Map, s Vec2) bool {
 }
 
 // На арене спавны прячутся именно за угловыми стенами: линию из центра до
-// каждого спавна перекрывает одна из четырёх коротких угловых стен 60×16.
+// каждого спавна перекрывает одна из четырёх угловых стен 100×16.
 func TestArenaSpawnsBehindCornerWalls(t *testing.T) {
 	m := ArenaMap()
 	c := Vec2{X: m.Width / 2, Y: m.Height / 2}
 	for _, s := range m.Spawns {
 		hidden := false
 		for _, o := range m.Obstacles {
-			if near(o.W, 60) && near(o.H, 16) {
+			if near(o.W, 100) && near(o.H, 16) {
 				if _, hit := segmentRectT(c, s, o, 0); hit {
 					hidden = true
 				}
