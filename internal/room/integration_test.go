@@ -3,6 +3,7 @@ package room_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
@@ -60,17 +61,29 @@ func dial(t *testing.T, s *server) *websocket.Conn {
 	return ws
 }
 
-// connect подключается и дожидается Welcome.
+// connect подключается, шлёт join без имени и ключа и дожидается Welcome.
 func connect(t *testing.T, s *server) *client {
 	t.Helper()
+	c, _ := connectAs(t, s, anet.Join{Type: anet.TypeJoin})
+	return c
+}
+
+// connectAs подключается с сообщением join j и возвращает клиента и Welcome.
+func connectAs(t *testing.T, s *server, j anet.Join) (*client, anet.Welcome) {
+	t.Helper()
 	c := &client{t: t, ws: dial(t, s)}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := wsjson.Write(ctx, c.ws, j); err != nil {
+		t.Fatalf("write join: %v", err)
+	}
 	var w anet.Welcome
 	c.readJSON(&w)
 	if w.Type != anet.TypeWelcome || w.Room != "lobby" || w.TickRate != room.TickRate || w.PlayerID == 0 {
 		t.Fatalf("bad welcome: %+v", w)
 	}
 	c.id = w.PlayerID
-	return c
+	return c, w
 }
 
 func (c *client) readJSON(v any) {
@@ -180,7 +193,7 @@ func TestNinthPlayerRejected(t *testing.T) {
 	for range room.MaxPlayers {
 		connect(t, s)
 	}
-	ws := dial(t, s)
+	ws := dialJoin(t, s)
 	if code := waitClose(t, ws); code != websocket.StatusTryAgainLater {
 		t.Fatalf("close code = %v, want %v", code, websocket.StatusTryAgainLater)
 	}
@@ -239,8 +252,82 @@ func TestShutdownClosesClientsWithGoingAway(t *testing.T) {
 	}
 
 	// После остановки новые подключения сразу отклоняются.
-	ws := dial(t, s)
+	ws := dialJoin(t, s)
 	if code := waitClose(t, ws); code != websocket.StatusGoingAway {
 		t.Fatalf("late join close code = %v, want %v", code, websocket.StatusGoingAway)
+	}
+}
+
+// dialJoin подключается и сразу шлёт пустой join, не дожидаясь ответа.
+func dialJoin(t *testing.T, s *server) *websocket.Conn {
+	t.Helper()
+	ws := dial(t, s)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := wsjson.Write(ctx, ws, anet.Join{Type: anet.TypeJoin}); err != nil {
+		t.Fatalf("write join: %v", err)
+	}
+	return ws
+}
+
+// Имя и ключ из join возвращаются в Welcome, имя видно в снапшотах
+// других игроков; ключ в снапшот не попадает.
+func TestJoinProfileInWelcomeAndSnapshot(t *testing.T) {
+	s := startServer(t)
+	a, wa := connectAs(t, s, anet.Join{Type: anet.TypeJoin, Name: "  Alice  ", PlayerKey: "key-alice"})
+	b, wb := connectAs(t, s, anet.Join{Type: anet.TypeJoin, Name: "x"})
+
+	if wa.Name != "Alice" || wa.PlayerKey != "key-alice" {
+		t.Fatalf("welcome A: name %q key %q, want Alice / key-alice", wa.Name, wa.PlayerKey)
+	}
+	if want := fmt.Sprintf("Player_%d", b.id); wb.Name != want {
+		t.Fatalf("welcome B name = %q, want %q", wb.Name, want)
+	}
+	if wb.PlayerKey == "" {
+		t.Fatal("пустой playerKey должен генерироваться")
+	}
+
+	var raw json.RawMessage
+	got := b.snapshotUntil(func(sn anet.Snapshot) bool {
+		if !hasAll(a.id, b.id)(sn) {
+			return false
+		}
+		raw, _ = json.Marshal(sn)
+		return true
+	})
+	pa, _ := player(got, a.id)
+	if pa.Name != "Alice" {
+		t.Fatalf("snapshot A = %+v, want name Alice", pa)
+	}
+	if strings.Contains(string(raw), "key-alice") {
+		t.Fatalf("playerKey утёк в снапшот: %s", raw)
+	}
+}
+
+// Без join соединение закрывается по таймауту, игрок в комнату не попадает.
+func TestJoinTimeoutClosesConnection(t *testing.T) {
+	defer room.SetJoinTimeout(100 * time.Millisecond)()
+	s := startServer(t)
+	ws := dial(t, s)
+	if code := waitClose(t, ws); code != websocket.StatusPolicyViolation {
+		t.Fatalf("close code = %v, want %v", code, websocket.StatusPolicyViolation)
+	}
+	// Слот не занят: можно набрать полную комнату.
+	for range room.MaxPlayers {
+		connect(t, s)
+	}
+}
+
+// Первым пришёл Input вместо join — соединение закрывается.
+func TestInputBeforeJoinClosesConnection(t *testing.T) {
+	s := startServer(t)
+	ws := dial(t, s)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := wsjson.Write(ctx, ws, anet.Input{Seq: 1, MoveX: 1}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if code := waitClose(t, ws); code != websocket.StatusPolicyViolation {
+		t.Fatalf("close code = %v, want %v", code, websocket.StatusPolicyViolation)
 	}
 }

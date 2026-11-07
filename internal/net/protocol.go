@@ -13,6 +13,23 @@ const (
 	TypeSnapshot = "snapshot"
 )
 
+// TypeJoin — тип первого сообщения клиент → сервер.
+const TypeJoin = "join"
+
+// Join — первое сообщение клиента после подключения, до любого Input. Если
+// его нет в течение таймаута (5 с) или первым пришло другое сообщение,
+// соединение закрывается.
+//
+// Name — отображаемое имя: 2–16 символов без управляющих, пробелы по краям
+// обрезаются; некорректное заменяется на Player_<id>. PlayerKey — постоянный
+// идентификатор игрока в таблице лидеров (клиент хранит его у себя), до 64
+// символов; пустой или некорректный сервер генерирует и возвращает в Welcome.
+type Join struct {
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	PlayerKey string `json:"playerKey"`
+}
+
 // Input — сообщение клиент → сервер. Клиент шлёт его каждый свой кадр/тик
 // (в том числе без изменений — это одновременно heartbeat).
 type Input struct {
@@ -37,6 +54,11 @@ type Welcome struct {
 	PlayerID uint32 `json:"playerId"`
 	Room     string `json:"room"`
 	TickRate int    `json:"tickRate"`
+	// Профиль игрока после проверки сервером: итоговое имя и
+	// ключ (сгенерированный, если клиент не прислал корректный) — клиенту
+	// стоит сохранить ключ для следующих подключений.
+	Name      string `json:"name"`
+	PlayerKey string `json:"playerKey"`
 	// Размеры мира — те же, что использует серверная симуляция.
 	Width  float64 `json:"width"`
 	Height float64 `json:"height"`
@@ -62,6 +84,7 @@ type Obstacle struct {
 // PlayerState — состояние одного игрока в снапшоте.
 type PlayerState struct {
 	ID      uint32  `json:"id"`
+	Name    string  `json:"name"`
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
 	Angle   float64 `json:"angle"`
@@ -185,6 +208,7 @@ type Round struct {
 // Score — итоговый счёт игрока в раунде.
 type Score struct {
 	ID    uint32 `json:"id"`
+	Name  string `json:"name"`
 	Score int    `json:"score"`
 }
 

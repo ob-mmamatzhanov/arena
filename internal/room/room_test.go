@@ -151,7 +151,7 @@ func startRoomWith(t *testing.T, cfg *game.Config) (*Room, context.CancelFunc) {
 
 func join(t *testing.T, rm *Room, c Client) uint32 {
 	t.Helper()
-	id, err := rm.Join(context.Background(), c)
+	id, err := rm.Join(context.Background(), c, anet.Join{})
 	if err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestJoinRejectsWhenFull(t *testing.T) {
 		}
 		ids[id] = true
 	}
-	if _, err := rm.Join(context.Background(), newFakeClient(1024)); !errors.Is(err, ErrFull) {
+	if _, err := rm.Join(context.Background(), newFakeClient(1024), anet.Join{}); !errors.Is(err, ErrFull) {
 		t.Fatalf("join #%d: err = %v, want ErrFull", MaxPlayers+1, err)
 	}
 }
@@ -262,7 +262,7 @@ func TestLeaveFreesSlotAndRemovesPlayer(t *testing.T) {
 		return !hasPlayer(s, leaving) && hasPlayer(s, obsID)
 	})
 
-	if _, err := rm.Join(context.Background(), newFakeClient(1024)); err != nil {
+	if _, err := rm.Join(context.Background(), newFakeClient(1024), anet.Join{}); err != nil {
 		t.Fatalf("slot was not freed after leave: %v", err)
 	}
 }
@@ -340,7 +340,7 @@ func TestFireProducesBulletsAndHits(t *testing.T) {
 // и последний уже с Fire=false.
 func TestBufferInputKeepsFireWithinTick(t *testing.T) {
 	rm := New("unit", slog.New(slog.DiscardHandler))
-	rm.clients[1] = newFakeClient(1)
+	rm.clients[1] = &client{conn: newFakeClient(1)}
 
 	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 1, Fire: true}})
 	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 2, MoveX: 1}})
@@ -359,7 +359,7 @@ func TestBufferInputKeepsFireWithinTick(t *testing.T) {
 
 func TestBufferInputKeepsDashWithinTick(t *testing.T) {
 	rm := New("unit", slog.New(slog.DiscardHandler))
-	rm.clients[1] = newFakeClient(1)
+	rm.clients[1] = &client{conn: newFakeClient(1)}
 
 	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 1, Dash: true}})
 	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 2, MoveY: 1}})
@@ -423,7 +423,7 @@ func TestRunStopClosesClientsAndRejectsJoins(t *testing.T) {
 	if code := c.waitClosed(t); code != websocket.StatusGoingAway {
 		t.Fatalf("close code = %v, want %v", code, websocket.StatusGoingAway)
 	}
-	if _, err := rm.Join(context.Background(), newFakeClient(1)); !errors.Is(err, ErrClosed) {
+	if _, err := rm.Join(context.Background(), newFakeClient(1), anet.Join{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("join after stop: err = %v, want ErrClosed", err)
 	}
 
@@ -445,7 +445,7 @@ func TestJoinRespectsContext(t *testing.T) {
 	rm := New("idle", slog.New(slog.DiscardHandler))
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := rm.Join(ctx, newFakeClient(1)); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := rm.Join(ctx, newFakeClient(1), anet.Join{}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want DeadlineExceeded", err)
 	}
 }
@@ -465,20 +465,21 @@ func TestSnapshotRoundJSONShape(t *testing.T) {
 			"intermission carries winner and scores",
 			game.RoundState{Phase: game.PhaseIntermission, TimeLeft: 8, WinnerID: 2,
 				Scores: []game.ScoreEntry{{ID: 1, Score: 3}, {ID: 2, Score: 10}}},
-			`{"phase":"intermission","timeLeft":8,"winnerId":2,"scores":[{"id":1,"score":3},{"id":2,"score":10}]}`,
+			`{"phase":"intermission","timeLeft":8,"winnerId":2,"scores":[{"id":1,"name":"Ann","score":3},{"id":2,"name":"Bob","score":10}]}`,
 		},
 		{
 			"draw keeps winnerId 0",
 			game.RoundState{Phase: game.PhaseIntermission, TimeLeft: 8,
 				Scores: []game.ScoreEntry{{ID: 1, Score: 0}}},
-			`{"phase":"intermission","timeLeft":8,"winnerId":0,"scores":[{"id":1,"score":0}]}`,
+			`{"phase":"intermission","timeLeft":8,"winnerId":0,"scores":[{"id":1,"name":"Ann","score":0}]}`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rm := New("test", slog.New(slog.DiscardHandler))
 			c := newFakeClient(1)
-			rm.clients[1] = c
+			rm.clients[1] = &client{conn: c, profile: profile{name: "Ann"}}
+			rm.clients[2] = &client{conn: newFakeClient(1), profile: profile{name: "Bob"}}
 			rm.broadcast(game.Snapshot{Round: tt.round})
 
 			var raw struct {
@@ -497,7 +498,7 @@ func TestSnapshotRoundJSONShape(t *testing.T) {
 func TestSnapshotPickupsAndBoostedJSON(t *testing.T) {
 	rm := New("test", slog.New(slog.DiscardHandler))
 	c := newFakeClient(2)
-	rm.clients[1] = c
+	rm.clients[1] = &client{conn: c}
 
 	rm.broadcast(game.Snapshot{
 		Players: []game.PlayerState{{ID: 1, HP: 100, Ammo: 7, Boosted: true}},
@@ -581,7 +582,7 @@ func TestShotEventDeliveredOncePerShot(t *testing.T) {
 func TestSnapshotDeadPlayerJSON(t *testing.T) {
 	rm := New("test", slog.New(slog.DiscardHandler))
 	c := newFakeClient(1)
-	rm.clients[1] = c
+	rm.clients[1] = &client{conn: c}
 
 	rm.broadcast(game.Snapshot{
 		Players: []game.PlayerState{{ID: 2, Dead: true, RespawnIn: 2.5}, {ID: 3, HP: 100, Invuln: true}},

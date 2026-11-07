@@ -109,6 +109,47 @@ func (c *Conn) Close(code websocket.StatusCode, reason string) {
 	})
 }
 
+// ErrNotJoin — первое сообщение клиента не join.
+var ErrNotJoin = errors.New("net: first message is not join")
+
+// ErrJoinTimeout — клиент не прислал join вовремя.
+var ErrJoinTimeout = errors.New("net: join timeout")
+
+// ReadJoin ждёт первое сообщение клиента (Join) не дольше timeout. При
+// ошибке соединение закрывается: по таймауту и при сообщении другого типа —
+// с кодом PolicyViolation, при нераспознанном JSON — UnsupportedData.
+// Вызывается до ReadPump в той же горутине.
+//
+// Таймаут — таймером через Close, а не контекстом Read: по истечении
+// контекста nhooyr рвёт соединение без close-кода (см. ReadPump).
+func (c *Conn) ReadJoin(timeout time.Duration) (Join, error) {
+	timer := time.AfterFunc(timeout, func() {
+		c.Close(websocket.StatusPolicyViolation, "join timeout")
+	})
+	typ, data, err := c.ws.Read(context.Background())
+	if !timer.Stop() {
+		return Join{}, ErrJoinTimeout
+	}
+	if err != nil {
+		c.Close(websocket.StatusPolicyViolation, "join failed")
+		return Join{}, err
+	}
+	var j Join
+	if typ != websocket.MessageText {
+		c.Close(websocket.StatusUnsupportedData, "bad join")
+		return Join{}, ErrNotJoin
+	}
+	if err := json.Unmarshal(data, &j); err != nil {
+		c.Close(websocket.StatusUnsupportedData, "bad join")
+		return Join{}, err
+	}
+	if j.Type != TypeJoin {
+		c.Close(websocket.StatusPolicyViolation, "join expected")
+		return Join{}, ErrNotJoin
+	}
+	return j, nil
+}
+
 // ReadPump читает Input-сообщения и передаёт их в onInput до ошибки или закрытия.
 // Блокирует; вызывается в горутине HTTP-обработчика.
 //

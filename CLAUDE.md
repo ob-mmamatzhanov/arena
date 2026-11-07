@@ -32,7 +32,9 @@ go test ./internal/game -run TestPrintMap -v           # ASCII-схема кар
 - **`internal/net`** — протокол обмена (`protocol.go`: JSON-типы `Input`, `Welcome`, `Snapshot`, `Event` …) и `Conn`, обёртка над WebSocket, где в сокет пишет только `WritePump`, а все остальные кладут в очередь через неблокирующий `TrySend`.
 - **`internal/room`** — единственное место, где оба слоя встречаются. `Room` — это **одна горутина** (`Run`), владеющая миром, клиентами и буферами ввода; снаружи с ней общаются только через каналы `join`/`leave`/`inputs`, поэтому мьютексов нет. Мир мутируется только в `tick()`. `broadcast` конвертирует `game.Snapshot` → `net.Snapshot`, маршалит один раз и выбрасывает клиентов, у которых очередь отправки переполнена.
 
-На каждое соединение (`room/handler.go`): accept → `Room.Join` (Welcome кладётся в очередь до возврата из Join) → горутина `WritePump` + блокирующий `ReadPump` → `Leave`. Подключения и отключения применяются на следующем тике.
+Профиль игрока (имя и `playerKey` — `room/profile.go`) живёт в комнате (`clients map[PlayerID]*client`), а не в `game`: симуляции он не нужен, `broadcast` подставляет имя в снапшот и `round.scores`.
+
+На каждое соединение (`room/handler.go`): accept → `Conn.ReadJoin` (первое сообщение обязано быть `join`, таймаут `joinTimeout` 5 с; в тестах подменяется через `SetJoinTimeout` из `export_test.go`) → `Room.Join` (Welcome кладётся в очередь до возврата из Join) → горутина `WritePump` + блокирующий `ReadPump` → `Leave`. Подключения и отключения применяются на следующем тике.
 
 ### Карты
 
@@ -59,5 +61,6 @@ go test ./internal/game -run TestPrintMap -v           # ASCII-схема кар
 
 - Комментарии в коде, сообщения тестов и тела коммит-сообщений — на русском; заголовки коммитов — на английском.
 - Каждая механика идёт отдельным коммитом вместе со своими тестами; каждый коммит должен сам по себе проходить build/vet/test.
+- В тестах `room` клиент — `&client{conn: newFakeClient(n), profile: profile{…}}`; интеграционные тесты подключаются через `connect`/`connectAs`/`dialJoin`, которые сначала шлют `join`.
 - Тики в тестах: `dt = 0.05`; хелперы `place`, `tickN`, `fireOnce`, `killOnce`, `runCollectHits`, `hitsOf`, `dropPickup` лежат в `_test.go` файлах `internal/game`; для карт — `forEachMap`, `freeCells`, `crateSlits` в `maps_test.go`.
 - Новое ограничение в тесте стоит проверить на «ловит ли он»: временно откатить механику (или `git stash` файла карты) и убедиться, что тест падает.

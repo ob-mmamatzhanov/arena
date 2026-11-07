@@ -48,7 +48,14 @@ type Client interface {
 
 type joinReq struct {
 	conn  Client
+	join  anet.Join
 	reply chan joinResult
+}
+
+// client — подключённый игрок: транспорт и профиль.
+type client struct {
+	conn Client
+	profile
 }
 
 // Room — игровая комната на 2–8 игроков.
@@ -63,7 +70,7 @@ type Room struct {
 
 	// Ниже — состояние, принадлежащее исключительно горутине Run.
 	world         *game.World
-	clients       map[game.PlayerID]Client
+	clients       map[game.PlayerID]*client
 	nextID        game.PlayerID
 	pendingJoins  []game.PlayerID
 	pendingLeaves []game.PlayerID
@@ -82,7 +89,7 @@ func New(name string, log *slog.Logger) *Room {
 		inputs:        make(chan anet.PlayerInput, inputsBuffer),
 		done:          make(chan struct{}),
 		world:         game.NewWorld(cfg),
-		clients:       make(map[game.PlayerID]Client, MaxPlayers),
+		clients:       make(map[game.PlayerID]*client, MaxPlayers),
 		pendingInputs: make(map[game.PlayerID]game.Input, MaxPlayers),
 	}
 }
@@ -93,10 +100,10 @@ func (r *Room) Name() string { return r.name }
 // Done закрывается после остановки комнаты.
 func (r *Room) Done() <-chan struct{} { return r.done }
 
-// Join регистрирует соединение в комнате и возвращает ID игрока.
-// Welcome кладётся в очередь отправки соединения до возврата.
-func (r *Room) Join(ctx context.Context, c Client) (uint32, error) {
-	req := joinReq{conn: c, reply: make(chan joinResult, 1)}
+// Join регистрирует соединение в комнате с профилем из сообщения join и
+// возвращает ID игрока. Welcome кладётся в очередь отправки соединения до возврата.
+func (r *Room) Join(ctx context.Context, c Client, j anet.Join) (uint32, error) {
+	req := joinReq{conn: c, join: j, reply: make(chan joinResult, 1)}
 	select {
 	case r.join <- req:
 	case <-r.done:
@@ -162,7 +169,11 @@ func (r *Room) handleJoin(req joinReq) {
 	}
 	r.nextID++
 	id := r.nextID
-	r.clients[id] = req.conn
+	cl := &client{conn: req.conn, profile: profile{
+		name: playerName(req.join.Name, id),
+		key:  playerKey(req.join.PlayerKey),
+	}}
+	r.clients[id] = cl
 	r.pendingJoins = append(r.pendingJoins, id)
 
 	cfg := r.world.Config()
@@ -175,20 +186,22 @@ func (r *Room) handleJoin(req joinReq) {
 		PlayerID:     uint32(id),
 		Room:         r.name,
 		TickRate:     TickRate,
+		Name:         cl.name,
+		PlayerKey:    cl.key,
 		Width:        cfg.Width,
 		Height:       cfg.Height,
 		PlayerSpeed:  cfg.PlayerSpeed,
 		PlayerRadius: cfg.PlayerRadius,
 		Obstacles:    obstacles,
 	})
-	if err == nil && !req.conn.TrySend(welcome) {
+	if err == nil && !cl.conn.TrySend(welcome) {
 		err = anet.ErrClosed
 	}
 	if err != nil {
 		r.log.Warn("welcome failed", "player", id, "err", err)
 	}
 	req.reply <- joinResult{id: id}
-	r.log.Info("player joined", "player", id, "clients", len(r.clients))
+	r.log.Info("player joined", "player", id, "name", cl.name, "clients", len(r.clients))
 }
 
 func (r *Room) handleLeave(id game.PlayerID) {
@@ -286,8 +299,10 @@ func (r *Room) broadcast(s game.Snapshot) {
 		}
 	}
 	for i, p := range s.Players {
+		pr := r.profileOf(p.ID)
 		msg.Players[i] = anet.PlayerState{
 			ID:      uint32(p.ID),
+			Name:    pr.name,
 			X:       p.Pos.X,
 			Y:       p.Pos.Y,
 			Angle:   p.Angle,
@@ -310,7 +325,7 @@ func (r *Room) broadcast(s game.Snapshot) {
 		msg.Round.WinnerID = &winner
 		msg.Round.Scores = make([]anet.Score, len(s.Round.Scores))
 		for i, sc := range s.Round.Scores {
-			msg.Round.Scores[i] = anet.Score{ID: uint32(sc.ID), Score: sc.Score}
+			msg.Round.Scores[i] = anet.Score{ID: uint32(sc.ID), Name: r.profileOf(sc.ID).name, Score: sc.Score}
 		}
 	}
 	data, err := json.Marshal(msg)
@@ -320,20 +335,28 @@ func (r *Room) broadcast(s game.Snapshot) {
 	}
 
 	for id, c := range r.clients {
-		if c.TrySend(data) {
+		if c.conn.TrySend(data) {
 			continue
 		}
 		r.log.Warn("dropping slow client", "player", id)
-		c.Close(websocket.StatusPolicyViolation, "too slow")
+		c.conn.Close(websocket.StatusPolicyViolation, "too slow")
 		delete(r.clients, id) // удаление во время range по map допустимо
 		delete(r.pendingInputs, id)
 		r.world.RemovePlayer(id)
 	}
 }
 
+// profileOf — профиль игрока; пустой, если клиента уже нет (вышел в этом тике).
+func (r *Room) profileOf(id game.PlayerID) profile {
+	if c, ok := r.clients[id]; ok {
+		return c.profile
+	}
+	return profile{}
+}
+
 func (r *Room) closeAll() {
 	for id, c := range r.clients {
-		c.Close(websocket.StatusGoingAway, "server shutting down")
+		c.conn.Close(websocket.StatusGoingAway, "server shutting down")
 		delete(r.clients, id)
 	}
 }

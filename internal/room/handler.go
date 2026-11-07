@@ -4,14 +4,20 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"nhooyr.io/websocket"
 
 	anet "arena/internal/net"
 )
 
+// joinTimeout — сколько ждать сообщения join после апгрейда. Переменная, а не
+// константа, — чтобы тесты могли его укоротить.
+var joinTimeout = 5 * time.Second
+
 // Handler возвращает HTTP-обработчик, апгрейдящий запрос до WebSocket
-// и подключающий игрока к комнате rm.
+// и подключающий игрока к комнате rm. Первым сообщением клиент обязан
+// прислать join (см. anet.Join), иначе соединение закрывается.
 func Handler(rm *Room, opts anet.AcceptOptions, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := anet.Accept(w, r, opts)
@@ -20,7 +26,13 @@ func Handler(rm *Room, opts anet.AcceptOptions, log *slog.Logger) http.Handler {
 			return
 		}
 
-		id, err := rm.Join(r.Context(), conn)
+		j, err := conn.ReadJoin(joinTimeout)
+		if err != nil {
+			log.Debug("no join", "room", rm.Name(), "err", err) // соединение уже закрыто
+			return
+		}
+
+		id, err := rm.Join(r.Context(), conn, j)
 		if err != nil {
 			code := websocket.StatusTryAgainLater
 			if errors.Is(err, ErrClosed) {
