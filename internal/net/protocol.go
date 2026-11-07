@@ -54,10 +54,11 @@ type Welcome struct {
 	PlayerID uint32 `json:"playerId"`
 	Room     string `json:"room"`
 	TickRate int    `json:"tickRate"`
-	// Профиль игрока после проверки сервером: итоговое имя и
+	// Профиль игрока после проверки сервером: итоговое имя, индекс цвета и
 	// ключ (сгенерированный, если клиент не прислал корректный) — клиенту
 	// стоит сохранить ключ для следующих подключений.
 	Name      string `json:"name"`
+	Color     int    `json:"color"`
 	PlayerKey string `json:"playerKey"`
 	// Размеры мира — те же, что использует серверная симуляция.
 	Width  float64 `json:"width"`
@@ -85,6 +86,7 @@ type Obstacle struct {
 type PlayerState struct {
 	ID      uint32  `json:"id"`
 	Name    string  `json:"name"`
+	Color   int     `json:"color"` // индекс в палитре из 8 цветов, у занятых — разные
 	X       float64 `json:"x"`
 	Y       float64 `json:"y"`
 	Angle   float64 `json:"angle"`

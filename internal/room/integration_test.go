@@ -270,7 +270,7 @@ func dialJoin(t *testing.T, s *server) *websocket.Conn {
 	return ws
 }
 
-// Имя и ключ из join возвращаются в Welcome, имя видно в снапшотах
+// Имя и ключ из join возвращаются в Welcome, имя и цвет видны в снапшотах
 // других игроков; ключ в снапшот не попадает.
 func TestJoinProfileInWelcomeAndSnapshot(t *testing.T) {
 	s := startServer(t)
@@ -286,6 +286,9 @@ func TestJoinProfileInWelcomeAndSnapshot(t *testing.T) {
 	if wb.PlayerKey == "" {
 		t.Fatal("пустой playerKey должен генерироваться")
 	}
+	if wa.Color == wb.Color {
+		t.Fatalf("оба игрока получили цвет %d", wa.Color)
+	}
 
 	var raw json.RawMessage
 	got := b.snapshotUntil(func(sn anet.Snapshot) bool {
@@ -296,8 +299,8 @@ func TestJoinProfileInWelcomeAndSnapshot(t *testing.T) {
 		return true
 	})
 	pa, _ := player(got, a.id)
-	if pa.Name != "Alice" {
-		t.Fatalf("snapshot A = %+v, want name Alice", pa)
+	if pa.Name != "Alice" || pa.Color != wa.Color {
+		t.Fatalf("snapshot A = %+v, want name Alice color %d", pa, wa.Color)
 	}
 	if strings.Contains(string(raw), "key-alice") {
 		t.Fatalf("playerKey утёк в снапшот: %s", raw)

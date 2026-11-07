@@ -32,7 +32,7 @@ go test ./internal/game -run TestPrintMap -v           # ASCII-схема кар
 - **`internal/net`** — протокол обмена (`protocol.go`: JSON-типы `Input`, `Welcome`, `Snapshot`, `Event` …) и `Conn`, обёртка над WebSocket, где в сокет пишет только `WritePump`, а все остальные кладут в очередь через неблокирующий `TrySend`.
 - **`internal/room`** — единственное место, где оба слоя встречаются. `Room` — это **одна горутина** (`Run`), владеющая миром, клиентами и буферами ввода; снаружи с ней общаются только через каналы `join`/`leave`/`inputs`, поэтому мьютексов нет. Мир мутируется только в `tick()`. `broadcast` конвертирует `game.Snapshot` → `net.Snapshot`, маршалит один раз и выбрасывает клиентов, у которых очередь отправки переполнена.
 
-Профиль игрока (имя и `playerKey` — `room/profile.go`) живёт в комнате (`clients map[PlayerID]*client`), а не в `game`: симуляции он не нужен, `broadcast` подставляет имя в снапшот и `round.scores`.
+Профиль игрока (имя, `playerKey`, индекс цвета — `room/profile.go`) живёт в комнате (`clients map[PlayerID]*client`), а не в `game`: симуляции он не нужен, `broadcast` подставляет имя и цвет в снапшот и `round.scores`.
 
 На каждое соединение (`room/handler.go`): accept → `Conn.ReadJoin` (первое сообщение обязано быть `join`, таймаут `joinTimeout` 5 с; в тестах подменяется через `SetJoinTimeout` из `export_test.go`) → `Room.Join` (Welcome кладётся в очередь до возврата из Join) → горутина `WritePump` + блокирующий `ReadPump` → `Leave`. Подключения и отключения применяются на следующем тике.
 

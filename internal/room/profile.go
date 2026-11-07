@@ -14,12 +14,16 @@ const (
 	minNameLen = 2
 	maxNameLen = 16
 	maxKeyLen  = 64
+
+	// Colors — размер палитры клиента; в снапшоте передаётся индекс 0…Colors-1.
+	Colors = 8
 )
 
 // profile — данные игрока, которые знает только комната (не симуляция).
 type profile struct {
-	name string
-	key  string // playerKey для таблицы лидеров; в снапшоты не попадает
+	name  string
+	key   string // playerKey для таблицы лидеров; в снапшоты не попадает
+	color int
 }
 
 // playerName — имя из join после проверки: пробелы по краям обрезаются,
@@ -53,4 +57,21 @@ func printable(s string) bool {
 		}
 	}
 	return true
+}
+
+// pickColor — наименее занятый индекс палитры среди текущих игроков; при
+// равенстве — меньший индекс. Цвет ушедшего игрока освобождается сам: он
+// просто перестаёт учитываться.
+func pickColor(clients map[game.PlayerID]*client) int {
+	var used [Colors]int
+	for _, c := range clients {
+		used[c.color]++
+	}
+	best := 0
+	for i := 1; i < Colors; i++ {
+		if used[i] < used[best] {
+			best = i
+		}
+	}
+	return best
 }

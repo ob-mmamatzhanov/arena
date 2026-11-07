@@ -2,7 +2,7 @@
 
 Авторитетный сервер для real-time 2D-шутера с видом сверху, написанный на Go. Клиенты подключаются по WebSocket, шлют свой ввод, а сервер симулирует мир с частотой 20 тиков в секунду и каждый тик рассылает всем снапшот состояния.
 
-- одна комната `lobby` до 8 игроков, у каждого своё имя;
+- одна комната `lobby` до 8 игроков, у каждого имя и цвет;
 - движение с препятствиями, стрельба с перегревом ствола, рывок (dash);
 - пикапы здоровья, ускорения и патронов;
 - раунды с лимитом времени и фрагов и перерывом между ними;
@@ -124,7 +124,7 @@ go run ./cmd/server -addr :8080 -origins localhost:5173
 ```json
 {
   "type": "welcome", "playerId": 3, "room": "lobby", "tickRate": 20,
-  "name": "Alice", "playerKey": "c2V0dGluZ3Mta2V5",
+  "name": "Alice", "color": 2, "playerKey": "c2V0dGluZ3Mta2V5",
   "width": 800, "height": 600, "speed": 200, "radius": 12,
   "obstacles": [{ "x": 350, "y": 260, "w": 100, "h": 80, "kind": "brick" },
                 { "x": 262, "y": 216, "w": 32, "h": 32, "kind": "crate" }, …]
@@ -142,7 +142,7 @@ go run ./cmd/server -addr :8080 -origins localhost:5173
 ```json
 {
   "type": "snapshot", "tick": 1234,
-  "players": [{ "id": 3, "name": "Alice", "x": 512, "y": 300, "angle": 1.57, "heat": 0.4, "hp": 75,
+  "players": [{ "id": 3, "name": "Alice", "color": 2, "x": 512, "y": 300, "angle": 1.57, "heat": 0.4, "hp": 75,
                 "score": 2, "ammo": 9, "boosted": false, "dashCd": 1.2, "lastSeq": 42,
                 "dead": false, "respawnIn": 0, "invuln": false }],
   "bullets": [{ "id": 17, "owner": 3, "x": 520, "y": 330, "vx": 0, "vy": 500 }],
@@ -165,7 +165,7 @@ go run ./cmd/server -addr :8080 -origins localhost:5173
 
 Во время перерыва `round` выглядит как `{ "phase": "intermission", "timeLeft": 6.0, "winnerId": 3, "scores": [{ "id": 3, "name": "Alice", "score": 10 }] }`. `winnerId` = 0 означает ничью или раунд без фрагов.
 
-`playerKey` в снапшоты не попадает.
+`color` — индекс 0–7 в палитре клиента. Входящий игрок получает наименее занятый цвет (при равенстве — меньший индекс), а цвет вышедшего освобождается. `playerKey` в снапшоты не попадает.
 
 ## Архитектура
 

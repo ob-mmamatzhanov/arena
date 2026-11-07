@@ -170,8 +170,9 @@ func (r *Room) handleJoin(req joinReq) {
 	r.nextID++
 	id := r.nextID
 	cl := &client{conn: req.conn, profile: profile{
-		name: playerName(req.join.Name, id),
-		key:  playerKey(req.join.PlayerKey),
+		name:  playerName(req.join.Name, id),
+		key:   playerKey(req.join.PlayerKey),
+		color: pickColor(r.clients), // до добавления себя
 	}}
 	r.clients[id] = cl
 	r.pendingJoins = append(r.pendingJoins, id)
@@ -187,6 +188,7 @@ func (r *Room) handleJoin(req joinReq) {
 		Room:         r.name,
 		TickRate:     TickRate,
 		Name:         cl.name,
+		Color:        cl.color,
 		PlayerKey:    cl.key,
 		Width:        cfg.Width,
 		Height:       cfg.Height,
@@ -201,7 +203,7 @@ func (r *Room) handleJoin(req joinReq) {
 		r.log.Warn("welcome failed", "player", id, "err", err)
 	}
 	req.reply <- joinResult{id: id}
-	r.log.Info("player joined", "player", id, "name", cl.name, "clients", len(r.clients))
+	r.log.Info("player joined", "player", id, "name", cl.name, "color", cl.color, "clients", len(r.clients))
 }
 
 func (r *Room) handleLeave(id game.PlayerID) {
@@ -303,6 +305,7 @@ func (r *Room) broadcast(s game.Snapshot) {
 		msg.Players[i] = anet.PlayerState{
 			ID:      uint32(p.ID),
 			Name:    pr.name,
+			Color:   pr.color,
 			X:       p.Pos.X,
 			Y:       p.Pos.Y,
 			Angle:   p.Angle,
