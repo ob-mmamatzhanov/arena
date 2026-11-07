@@ -21,7 +21,7 @@ go run ./cmd/server -addr :8080 -origins localhost:5173
 | Флаг       | По умолчанию | Описание                                                                   |
 |------------|--------------|----------------------------------------------------------------------------|
 | `-addr`    | `:8080`      | адрес HTTP-сервера                                                         |
-| `-origins` | пусто        | разрешённые `Origin` для WebSocket через запятую, например `localhost:5173` |
+| `-origins` | пусто        | разрешённые `Origin` для WebSocket и CORS `/leaderboard` через запятую, например `localhost:5173` |
 | `-redis`   | `$REDIS_URL` | URL Redis для таблицы лидеров, `redis://[user:pass@]host:port/db`; пусто — в памяти |
 
 Хранилище таблицы лидеров выбирается при старте и пишется в лог (`store=redis host=…` или `store=memory`; пароль в лог не попадает). Если URL некорректен или Redis не отвечает, сервер логирует ошибку и работает с таблицей в памяти, которая теряется при перезапуске. На Fly URL задаётся секретом: `fly secrets set REDIS_URL=redis://…`.
@@ -29,7 +29,8 @@ go run ./cmd/server -addr :8080 -origins localhost:5173
 Эндпоинты:
 
 - `GET /ws` — WebSocket-подключение игрока;
-- `GET /healthz` — `200 ok`, пока комната работает, иначе `503`.
+- `GET /healthz` — `200 ok`, пока комната работает, иначе `503`;
+- `GET /leaderboard?n=10` — лучшие `n` игроков (по умолчанию 10, максимум 100) по фрагам за всё время: `[{ "name": "Alice", "score": 42 }, …]`. CORS разрешён тем же `Origin`, что и WebSocket; если хранилище недоступно — `503`.
 
 Сервер корректно завершается по `SIGINT`/`SIGTERM`: сначала закрывает WebSocket-соединения, затем останавливает HTTP-сервер.
 
@@ -178,7 +179,7 @@ cmd/server        точка входа: флаги, HTTP, graceful shutdown
 internal/game     чистая симуляция: World.Update(dt, inputs), World.Snapshot()
 internal/net      JSON-протокол и обёртка над WebSocket-соединением
 internal/room     комната: связывает game и net, тикает мир, рассылает снапшоты, пишет фраги
-internal/leaderboard  таблица лидеров: Store (память / Redis)
+internal/leaderboard  таблица лидеров: Store (память / Redis) и GET /leaderboard
 ```
 
 Зависимости направлены строго `room → game`, `room → net` и `room → leaderboard`, а `game`, `net` и `leaderboard` друг о друге не знают.

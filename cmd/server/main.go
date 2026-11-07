@@ -55,6 +55,7 @@ func main() {
 		}
 	})
 	mux.Handle("GET /ws", room.Handler(lobby, anet.AcceptOptions{OriginPatterns: originPatterns}, log))
+	mux.Handle("GET /leaderboard", leaderboard.Handler(lb, originPatterns, log))
 
 	srv := &http.Server{
 		Addr:              *addr,

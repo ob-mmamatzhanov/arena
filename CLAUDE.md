@@ -9,7 +9,7 @@ go build ./... && go vet ./... && go test ./...      # стандартная п
 go test -race ./...                                    # room/net конкурентны — прогнать перед push
 go test ./internal/game -run TestDashImpulse -v        # отдельный тест
 go test ./internal/game -run '^$' -bench BenchmarkUpdate8Players100Bullets -benchmem
-go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, health на GET /healthz
+go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, health на GET /healthz, топ на GET /leaderboard
                                                           # -redis (по умолчанию $REDIS_URL): пусто или Redis недоступен — таблица в памяти
 go test ./internal/game -run TestPrintMap -v           # ASCII-схема карты: '#' стена, 'x' ящик, 'S' спавн
 ```
@@ -31,7 +31,7 @@ go test ./internal/game -run TestPrintMap -v           # ASCII-схема кар
 
 - **`internal/game`** — чистая симуляция, без I/O, без горутин, не потокобезопасна. `World.Update(dt, inputs)` продвигает один тик; `World.Snapshot()` — чистое чтение, возвращающее копии. Все настройки живут в `Config` (`DefaultConfig()` — продакшен). Механики разнесены по файлам: `world.go` (движение, препятствия, пули, раунды, перегрев), `pickups.go`, `dash.go`, `events.go`, `maps.go`.
 - **`internal/net`** — протокол обмена (`protocol.go`: JSON-типы `Input`, `Welcome`, `Snapshot`, `Event` …) и `Conn`, обёртка над WebSocket, где в сокет пишет только `WritePump`, а все остальные кладут в очередь через неблокирующий `TrySend`.
-- **`internal/leaderboard`** — таблица лидеров за всё время: интерфейс `Store` (`AddScore`, `Top`), реализации `Memory` и `Redis` (go-redis/v9: `ZINCRBY lb:scores`, `HSET lb:names`, член ZSET — `playerKey`), `Open(url)` с откатом на `Memory` при пустом URL или недоступном Redis (в лог — только хост). Тесты Redis идут на `miniredis` — живой Redis не нужен.
+- **`internal/leaderboard`** — таблица лидеров за всё время: интерфейс `Store` (`AddScore`, `Top`), реализации `Memory` и `Redis` (go-redis/v9: `ZINCRBY lb:scores`, `HSET lb:names`, член ZSET — `playerKey`), `Open(url)` с откатом на `Memory` при пустом URL или недоступном Redis (в лог — только хост) и HTTP-обработчик `GET /leaderboard` с той же проверкой `Origin`, что у nhooyr. Тесты Redis идут на `miniredis` — живой Redis не нужен.
 - **`internal/room`** — единственное место, где слои встречаются. `Room` — это **одна горутина** (`Run`), владеющая миром, клиентами и буферами ввода; снаружи с ней общаются только через каналы `join`/`leave`/`inputs`, поэтому мьютексов нет. Мир мутируется только в `tick()`. `broadcast` конвертирует `game.Snapshot` → `net.Snapshot`, маршалит один раз и выбрасывает клиентов, у которых очередь отправки переполнена.
 
 Профиль игрока (имя, `playerKey`, индекс цвета — `room/profile.go`) живёт в комнате (`clients map[PlayerID]*client`), а не в `game`: симуляции он не нужен, `broadcast` подставляет имя и цвет в снапшот и `round.scores`. Фраги пишутся в `Store` асинхронно: `tick` → `recordKills` неблокирующе кладёт +1 стрелку в буферизованный канал, единственный писатель — горутина `writeScores`; при полной очереди запись теряется, тик не ждёт. При остановке `Run` дописывает очередь не дольше `flushTimeout`.

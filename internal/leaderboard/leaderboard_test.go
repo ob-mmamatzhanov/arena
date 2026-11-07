@@ -3,7 +3,11 @@ package leaderboard
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -135,5 +139,95 @@ func TestOpenSelectsStore(t *testing.T) {
 				t.Fatalf("в лог попал пароль: %s", out)
 			}
 		})
+	}
+}
+
+// failStore — Store, у которого Top всегда падает.
+type failStore struct{}
+
+func (failStore) AddScore(context.Context, string, string, int) error { return nil }
+
+func (failStore) Top(context.Context, int) ([]Entry, error) { return nil, errors.New("down") }
+
+func TestHandler(t *testing.T) {
+	st := NewMemory()
+	ctx := context.Background()
+	for i, name := range []string{"a", "b", "c"} {
+		_ = st.AddScore(ctx, name, strings.ToUpper(name), i+1)
+	}
+	h := Handler(st, []string{"localhost:*", "game.example.com"}, slog.New(slog.DiscardHandler))
+
+	get := func(h http.Handler, target, origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get(h, "/leaderboard", "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status %d, content-type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	var top []Entry
+	if err := json.Unmarshal(rec.Body.Bytes(), &top); err != nil {
+		t.Fatal(err)
+	}
+	if want := []Entry{{"C", 3}, {"B", 2}, {"A", 1}}; !reflect.DeepEqual(top, want) {
+		t.Fatalf("top = %v, want %v", top, want)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `[{"name":"C","score":3},{"name":"B","score":2},{"name":"A","score":1}]` {
+		t.Fatalf("JSON = %s", got)
+	}
+
+	rec = get(h, "/leaderboard?n=2", "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &top); err != nil || len(top) != 2 {
+		t.Fatalf("n=2: %s", rec.Body)
+	}
+	for _, bad := range []string{"0", "-1", "abc"} {
+		if rec := get(h, "/leaderboard?n="+bad, ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("n=%s: status %d, want 400", bad, rec.Code)
+		}
+	}
+
+	empty := Handler(NewMemory(), nil, slog.New(slog.DiscardHandler))
+	if rec := get(empty, "/leaderboard", ""); strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("пустая таблица = %s, want []", rec.Body)
+	}
+
+	down := Handler(failStore{}, nil, slog.New(slog.DiscardHandler))
+	if rec := get(down, "/leaderboard", ""); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("хранилище недоступно: status %d, want 503", rec.Code)
+	}
+}
+
+// CORS — те же правила, что у WebSocket: шаблоны хоста и собственный хост.
+func TestHandlerCORS(t *testing.T) {
+	h := Handler(NewMemory(), []string{"localhost:*", "game.example.com"}, slog.New(slog.DiscardHandler))
+	tests := []struct {
+		origin  string
+		allowed bool
+	}{
+		{"http://localhost:5173", true},
+		{"https://GAME.example.com", true},
+		{"http://example.com", true}, // собственный хост запроса (httptest — example.com)
+		{"https://evil.com", false},
+		{"https://game.example.com.evil.com", false},
+		{"not a url", false},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(http.MethodGet, "/leaderboard", nil)
+		req.Header.Set("Origin", tt.origin)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		got := rec.Header().Get("Access-Control-Allow-Origin")
+		if tt.allowed && got != tt.origin || !tt.allowed && got != "" {
+			t.Errorf("Origin %q: Allow-Origin = %q, allowed=%v", tt.origin, got, tt.allowed)
+		}
+		if rec.Header().Get("Vary") != "Origin" {
+			t.Errorf("Origin %q: нет Vary: Origin", tt.origin)
+		}
 	}
 }
