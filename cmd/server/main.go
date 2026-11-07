@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"arena/internal/leaderboard"
 	anet "arena/internal/net"
 	"arena/internal/room"
 )
@@ -19,6 +21,8 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "адрес HTTP-сервера")
 	origins := flag.String("origins", "", "разрешённые Origin через запятую (например, localhost:5173)")
+	redisURL := flag.String("redis", os.Getenv("REDIS_URL"),
+		"URL Redis для таблицы лидеров (redis://[user:pass@]host:port/db); пусто — в памяти. По умолчанию $REDIS_URL")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -26,7 +30,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	lobby := room.New("lobby", log)
+	// Недоступный Redis не мешает старту: Open откатывается на память.
+	lb := leaderboard.Open(ctx, *redisURL, log)
+	if c, ok := lb.(io.Closer); ok {
+		defer c.Close()
+	}
+
+	lobby := room.New("lobby", lb, log)
 	roomCtx, stopRoom := context.WithCancel(context.Background())
 	go lobby.Run(roomCtx)
 

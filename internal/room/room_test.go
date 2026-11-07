@@ -136,7 +136,7 @@ func startRoom(t *testing.T) (*Room, context.CancelFunc) {
 // startRoomWith — комната с миром на конфиге cfg (nil — DefaultConfig).
 func startRoomWith(t *testing.T, cfg *game.Config) (*Room, context.CancelFunc) {
 	t.Helper()
-	rm := New("test", slog.New(slog.DiscardHandler))
+	rm := New("test", nil, slog.New(slog.DiscardHandler))
 	if cfg != nil {
 		rm.world = game.NewWorld(*cfg) // до Run: мир ещё не принадлежит горутине комнаты
 	}
@@ -339,7 +339,7 @@ func TestFireProducesBulletsAndHits(t *testing.T) {
 // Короткое нажатие огня не должно теряться, если за тик пришло несколько вводов
 // и последний уже с Fire=false.
 func TestBufferInputKeepsFireWithinTick(t *testing.T) {
-	rm := New("unit", slog.New(slog.DiscardHandler))
+	rm := New("unit", nil, slog.New(slog.DiscardHandler))
 	rm.clients[1] = &client{conn: newFakeClient(1)}
 
 	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 1, Fire: true}})
@@ -358,7 +358,7 @@ func TestBufferInputKeepsFireWithinTick(t *testing.T) {
 }
 
 func TestBufferInputKeepsDashWithinTick(t *testing.T) {
-	rm := New("unit", slog.New(slog.DiscardHandler))
+	rm := New("unit", nil, slog.New(slog.DiscardHandler))
 	rm.clients[1] = &client{conn: newFakeClient(1)}
 
 	rm.bufferInput(anet.PlayerInput{PlayerID: 1, Input: anet.Input{Seq: 1, Dash: true}})
@@ -442,7 +442,7 @@ func TestRunStopClosesClientsAndRejectsJoins(t *testing.T) {
 
 func TestJoinRespectsContext(t *testing.T) {
 	// Комната не запущена: Join должен вернуться по отмене контекста.
-	rm := New("idle", slog.New(slog.DiscardHandler))
+	rm := New("idle", nil, slog.New(slog.DiscardHandler))
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := rm.Join(ctx, newFakeClient(1), anet.Join{}); !errors.Is(err, context.DeadlineExceeded) {
@@ -476,7 +476,7 @@ func TestSnapshotRoundJSONShape(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rm := New("test", slog.New(slog.DiscardHandler))
+			rm := New("test", nil, slog.New(slog.DiscardHandler))
 			c := newFakeClient(1)
 			rm.clients[1] = &client{conn: c, profile: profile{name: "Ann"}}
 			rm.clients[2] = &client{conn: newFakeClient(1), profile: profile{name: "Bob"}}
@@ -496,7 +496,7 @@ func TestSnapshotRoundJSONShape(t *testing.T) {
 }
 
 func TestSnapshotPickupsAndBoostedJSON(t *testing.T) {
-	rm := New("test", slog.New(slog.DiscardHandler))
+	rm := New("test", nil, slog.New(slog.DiscardHandler))
 	c := newFakeClient(2)
 	rm.clients[1] = &client{conn: c}
 
@@ -580,7 +580,7 @@ func TestShotEventDeliveredOncePerShot(t *testing.T) {
 }
 
 func TestSnapshotDeadPlayerJSON(t *testing.T) {
-	rm := New("test", slog.New(slog.DiscardHandler))
+	rm := New("test", nil, slog.New(slog.DiscardHandler))
 	c := newFakeClient(1)
 	rm.clients[1] = &client{conn: c}
 

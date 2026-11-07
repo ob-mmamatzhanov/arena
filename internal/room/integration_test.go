@@ -29,7 +29,7 @@ type server struct {
 func startServer(t *testing.T) *server {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
-	rm := room.New("lobby", log)
+	rm := room.New("lobby", nil, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	go rm.Run(ctx)
 

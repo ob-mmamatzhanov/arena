@@ -16,6 +16,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"arena/internal/game"
+	"arena/internal/leaderboard"
 	anet "arena/internal/net"
 )
 
@@ -25,6 +26,14 @@ const (
 
 	tickDT       = 1.0 / TickRate
 	inputsBuffer = MaxPlayers * 32
+
+	// scoresBuffer — очередь записей в таблицу лидеров. При переполнении
+	// (хранилище тормозит) записи теряются, а тик не ждёт.
+	scoresBuffer = 256
+	// storeTimeout — таймаут одной записи в хранилище.
+	storeTimeout = 2 * time.Second
+	// flushTimeout — сколько при остановке комнаты ждать дозаписи очереди.
+	flushTimeout = 5 * time.Second
 )
 
 var (
@@ -58,6 +67,12 @@ type client struct {
 	profile
 }
 
+// scoreUpdate — прибавка к счёту игрока в таблице лидеров.
+type scoreUpdate struct {
+	key, name string
+	score     int
+}
+
 // Room — игровая комната на 2–8 игроков.
 type Room struct {
 	name string
@@ -68,6 +83,11 @@ type Room struct {
 	inputs chan anet.PlayerInput
 	done   chan struct{}
 
+	// lb — таблица лидеров (nil — фраги не записываются). В неё пишет только
+	// горутина writeScores, получая записи из канала scores.
+	lb     leaderboard.Store
+	scores chan scoreUpdate
+
 	// Ниже — состояние, принадлежащее исключительно горутине Run.
 	world         *game.World
 	clients       map[game.PlayerID]*client
@@ -77,8 +97,9 @@ type Room struct {
 	pendingInputs map[game.PlayerID]game.Input
 }
 
-// New создаёт комнату. Её нужно запустить через Run.
-func New(name string, log *slog.Logger) *Room {
+// New создаёт комнату. Её нужно запустить через Run. Фраги игроков
+// записываются в lb; nil — без таблицы лидеров.
+func New(name string, lb leaderboard.Store, log *slog.Logger) *Room {
 	cfg := game.DefaultConfig()
 	cfg.Seed = uint64(time.Now().UnixNano()) // разные комнаты/запуски — разные респавны
 	return &Room{
@@ -88,6 +109,8 @@ func New(name string, log *slog.Logger) *Room {
 		leave:         make(chan game.PlayerID, MaxPlayers),
 		inputs:        make(chan anet.PlayerInput, inputsBuffer),
 		done:          make(chan struct{}),
+		lb:            lb,
+		scores:        make(chan scoreUpdate, scoresBuffer),
 		world:         game.NewWorld(cfg),
 		clients:       make(map[game.PlayerID]*client, MaxPlayers),
 		pendingInputs: make(map[game.PlayerID]game.Input, MaxPlayers),
@@ -138,6 +161,9 @@ func (r *Room) PushInput(in anet.PlayerInput) bool {
 // Run — главный цикл комнаты. Блокирует до отмены ctx.
 func (r *Room) Run(ctx context.Context) {
 	defer close(r.done)
+	writerDone := make(chan struct{})
+	go r.writeScores(writerDone)
+	defer r.flushScores(writerDone) // после closeAll: Done закрывается, когда очередь дописана
 	defer r.closeAll()
 
 	ticker := time.NewTicker(time.Second / TickRate)
@@ -258,9 +284,59 @@ func (r *Room) tick() {
 	clear(r.pendingInputs)
 
 	if len(r.clients) == 0 {
+		return // без клиентов нет и стрелков, которым записывать фраги
+	}
+	s := r.world.Snapshot()
+	r.recordKills(s.Events)
+	r.broadcast(s)
+}
+
+// recordKills ставит в очередь таблицы лидеров +1 стрелку за каждый kill.
+// Не блокирует: при полной очереди запись теряется с предупреждением.
+// Стрелок, уже отключившийся к этому тику, не записывается — его профиля нет.
+func (r *Room) recordKills(events []game.Event) {
+	if r.lb == nil {
 		return
 	}
-	r.broadcast(r.world.Snapshot())
+	for _, e := range events {
+		if e.Type != game.EventKill {
+			continue
+		}
+		cl, ok := r.clients[e.Shooter]
+		if !ok {
+			continue
+		}
+		select {
+		case r.scores <- scoreUpdate{key: cl.key, name: cl.name, score: 1}:
+		default:
+			r.log.Warn("leaderboard queue full, kill not recorded", "player", e.Shooter)
+		}
+	}
+}
+
+// writeScores — единственный писатель в таблицу лидеров. Работает, пока
+// канал scores не закрыт; ошибки хранилища только логируются.
+func (r *Room) writeScores(done chan<- struct{}) {
+	defer close(done)
+	for u := range r.scores {
+		ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+		err := r.lb.AddScore(ctx, u.key, u.name, u.score)
+		cancel()
+		if err != nil {
+			r.log.Warn("leaderboard write failed", "name", u.name, "err", err)
+		}
+	}
+}
+
+// flushScores закрывает очередь и ждёт, пока писатель её доработает, но не
+// дольше flushTimeout: недоступное хранилище не должно задерживать остановку.
+func (r *Room) flushScores(writerDone <-chan struct{}) {
+	close(r.scores)
+	select {
+	case <-writerDone:
+	case <-time.After(flushTimeout):
+		r.log.Warn("leaderboard flush timed out", "pending", len(r.scores))
+	}
 }
 
 // broadcast сериализует снапшот один раз и неблокирующе раздаёт его всем.

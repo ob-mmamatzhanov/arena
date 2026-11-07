@@ -2,11 +2,15 @@ package room
 
 import (
 	"context"
+	"log/slog"
+	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"arena/internal/game"
+	"arena/internal/leaderboard"
 	anet "arena/internal/net"
 )
 
@@ -118,5 +122,136 @@ func TestPickColorLeastUsed(t *testing.T) {
 	add(101, 2)
 	if got := pickColor(clients); got != 1 {
 		t.Fatalf("цвета 0 и 2 заняты дважды: %d, want 1", got)
+	}
+}
+
+// recStore — Store, запоминающий вызовы AddScore.
+type recStore struct {
+	mu    sync.Mutex
+	calls []scoreUpdate
+	added chan struct{}
+	block chan struct{} // не nil — AddScore ждёт его закрытия
+}
+
+func newRecStore() *recStore { return &recStore{added: make(chan struct{}, 64)} }
+
+func (s *recStore) AddScore(ctx context.Context, key, name string, score int) error {
+	if s.block != nil {
+		select {
+		case <-s.block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	s.mu.Lock()
+	s.calls = append(s.calls, scoreUpdate{key: key, name: name, score: score})
+	s.mu.Unlock()
+	select { // сигнал «что-то записано»; переполнение не важно
+	case s.added <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *recStore) Top(context.Context, int) ([]leaderboard.Entry, error) { return nil, nil }
+
+func (s *recStore) snapshot() []scoreUpdate {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]scoreUpdate(nil), s.calls...)
+}
+
+// Фраг в настоящем тике комнаты записывается стрелку (ключ и имя из join)
+// +1 очко; убитому — ничего.
+func TestKillRecordedToLeaderboard(t *testing.T) {
+	cfg := game.DefaultConfig()
+	cfg.Map = game.Map{Name: "open", Width: 800, Height: 600}
+	cfg.BulletDamage = game.StartHP // одно попадание — фраг
+	cfg.InvulnTime = 0
+	st := newRecStore()
+	rm := New("test", st, slog.New(slog.DiscardHandler))
+	rm.world = game.NewWorld(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	go rm.Run(ctx)
+	t.Cleanup(func() { cancel(); <-rm.Done() })
+
+	ca, cb := newFakeClient(1024), newFakeClient(1024)
+	a, err := rm.Join(context.Background(), ca, anet.Join{Name: "Shooter", PlayerKey: "key-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := rm.Join(context.Background(), cb, anet.Join{Name: "Victim", PlayerKey: "key-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, a) && hasPlayer(s, b) })
+	pa, _ := findPlayer(s, a)
+	pb, _ := findPlayer(s, b)
+	angle := math.Atan2(pb.Y-pa.Y, pb.X-pa.X)
+	rm.PushInput(anet.PlayerInput{PlayerID: a, Input: anet.Input{Seq: 1, Angle: angle, Fire: true}})
+
+	select {
+	case <-st.added:
+	case <-time.After(waitTimeout):
+		t.Fatal("фраг не записан в таблицу лидеров")
+	}
+	rm.PushInput(anet.PlayerInput{PlayerID: a, Input: anet.Input{Seq: 2, Angle: angle}})
+	if got := st.snapshot()[0]; got != (scoreUpdate{key: "key-a", name: "Shooter", score: 1}) {
+		t.Fatalf("AddScore = %+v, want key-a / Shooter / 1", got)
+	}
+}
+
+// Зависшее хранилище не блокирует тик: записи сверх очереди теряются,
+// recordKills возвращается сразу.
+func TestRecordKillsDoesNotBlock(t *testing.T) {
+	st := newRecStore()
+	st.block = make(chan struct{})
+	rm := New("test", st, slog.New(slog.DiscardHandler))
+	rm.clients[1] = &client{conn: newFakeClient(1), profile: profile{name: "A", key: "k"}}
+	writerDone := make(chan struct{})
+	go rm.writeScores(writerDone)
+
+	kills := []game.Event{{Type: game.EventKill, Shooter: 1, Target: 2}, {Type: game.EventHit, Shooter: 1}}
+	done := make(chan struct{})
+	go func() {
+		for range scoresBuffer * 2 {
+			rm.recordKills(kills)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(waitTimeout):
+		t.Fatal("recordKills заблокировался на зависшем хранилище")
+	}
+	close(st.block)
+	close(rm.scores)
+	<-writerDone
+	// Записалось не больше, чем влезло в очередь (+1 — та, что ждала в AddScore).
+	if n := len(st.snapshot()); n == 0 || n > scoresBuffer+1 {
+		t.Fatalf("записано %d, want 1…%d", n, scoresBuffer+1)
+	}
+	for _, c := range st.snapshot() {
+		if c != (scoreUpdate{key: "k", name: "A", score: 1}) {
+			t.Fatalf("лишняя запись %+v: hit не должен записываться", c)
+		}
+	}
+}
+
+// Стрелок, отключившийся до тика с фрагом, не записывается; без хранилища
+// recordKills ничего не делает.
+func TestRecordKillsSkipsUnknownShooterAndNilStore(t *testing.T) {
+	st := newRecStore()
+	rm := New("test", st, slog.New(slog.DiscardHandler))
+	rm.recordKills([]game.Event{{Type: game.EventKill, Shooter: 9, Target: 2}})
+	if len(rm.scores) != 0 {
+		t.Fatal("фраг отключившегося стрелка поставлен в очередь")
+	}
+
+	rm = New("test", nil, slog.New(slog.DiscardHandler))
+	rm.clients[1] = &client{conn: newFakeClient(1), profile: profile{key: "k"}}
+	rm.recordKills([]game.Event{{Type: game.EventKill, Shooter: 1, Target: 2}})
+	if len(rm.scores) != 0 {
+		t.Fatal("без хранилища фраг поставлен в очередь")
 	}
 }
