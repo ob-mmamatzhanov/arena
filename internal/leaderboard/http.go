@@ -19,7 +19,7 @@ const (
 
 // Handler отдаёт GET /leaderboard?n=10 → [{"name": …, "score": …}, …]
 // (n по умолчанию 10, не больше 100). CORS разрешён тем же Origin, что и
-// WebSocket: originPatterns — шаблоны хоста в формате nhooyr.io/websocket
+// WebSocket: originPatterns — шаблоны хоста в формате github.com/coder/websocket
 // (например, "localhost:*"), плюс собственный хост сервера.
 func Handler(st Store, originPatterns []string, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

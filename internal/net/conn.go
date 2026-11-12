@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 const (
@@ -34,7 +34,7 @@ type Conn struct {
 
 // AcceptOptions — настройки апгрейда HTTP → WebSocket.
 type AcceptOptions struct {
-	// OriginPatterns — разрешённые Origin помимо собственного хоста (см. nhooyr.io/websocket).
+	// OriginPatterns — разрешённые Origin помимо собственного хоста (см. github.com/coder/websocket).
 	OriginPatterns []string
 }
 
@@ -121,7 +121,7 @@ var ErrJoinTimeout = errors.New("net: join timeout")
 // Вызывается до ReadPump в той же горутине.
 //
 // Таймаут — таймером через Close, а не контекстом Read: по истечении
-// контекста nhooyr рвёт соединение без close-кода (см. ReadPump).
+// контекста coder/websocket рвёт соединение без close-кода (см. ReadPump).
 func (c *Conn) ReadJoin(timeout time.Duration) (Join, error) {
 	timer := time.AfterFunc(timeout, func() {
 		c.Close(websocket.StatusPolicyViolation, "join timeout")
@@ -154,7 +154,7 @@ func (c *Conn) ReadJoin(timeout time.Duration) (Join, error) {
 // Блокирует; вызывается в горутине HTTP-обработчика.
 //
 // Таймауты чтения и записи намеренно не наследуются от c.ctx: при отмене
-// контекста nhooyr сам шлёт close-фрейм (PolicyViolation) или рвёт TCP, что
+// контекста coder/websocket сам шлёт close-фрейм (PolicyViolation) или рвёт TCP, что
 // перебило бы код из Close. Прерывание операций обеспечивает ws.Close.
 func (c *Conn) ReadPump(onInput func(Input)) error {
 	for {

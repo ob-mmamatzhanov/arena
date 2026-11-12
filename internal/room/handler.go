@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	anet "arena/internal/net"
 )

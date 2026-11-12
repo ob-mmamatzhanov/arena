@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"arena/internal/game"
 	anet "arena/internal/net"

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"arena/internal/cors"
 	anet "arena/internal/net"
@@ -31,7 +31,7 @@ const (
 
 // HTTPConfig — настройки HTTP-ручек менеджера.
 type HTTPConfig struct {
-	// OriginPatterns — разрешённые Origin (шаблоны хоста как у nhooyr.io/websocket)
+	// OriginPatterns — разрешённые Origin (шаблоны хоста как у github.com/coder/websocket)
 	// и для WebSocket, и для CORS.
 	OriginPatterns []string
 	// ClientIPHeader — заголовок доверенного прокси с IP клиента (Fly-Client-IP)
