@@ -601,3 +601,55 @@ func TestSnapshotDeadPlayerJSON(t *testing.T) {
 		t.Fatalf("неуязвимый игрок = %v, want dead=false respawnIn=0 invuln=true", fresh)
 	}
 }
+
+// Сломанный ящик доходит до клиентов: события crateHit/crateBroken с индексом
+// препятствия, snapshot.crates — и у тех, кто вошёл уже после поломки
+// (crateHits в welcome, ящик в crates первого же снапшота).
+func TestCrateBreakDeliveredToClients(t *testing.T) {
+	cfg := game.DefaultConfig()
+	cfg.Map = game.Map{Name: "open", Width: 800, Height: 600, Obstacles: []game.Obstacle{
+		{X: 384, Y: 284, W: 32, H: 32, Kind: game.ObstacleCrate},
+	}}
+	cfg.CrateHits = 1
+	rm, _ := startRoomWith(t, &cfg)
+	ca := newFakeClient(1024)
+	a := join(t, rm, ca)
+	if w := ca.welcome(t); w.CrateHits != 1 {
+		t.Fatalf("welcome.crateHits = %d, want 1", w.CrateHits)
+	}
+	s := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, a) })
+	if s.Crates != nil {
+		t.Fatalf("целый ящик в crates: %+v", s.Crates)
+	}
+	pa, _ := findPlayer(s, a)
+	rm.PushInput(anet.PlayerInput{PlayerID: a, Input: anet.Input{Seq: 1, Angle: math.Atan2(300-pa.Y, 400-pa.X), Fire: true}})
+
+	var hit, brk *anet.Event
+	got := ca.snapshotUntil(t, func(s anet.Snapshot) bool {
+		for _, e := range s.Events {
+			switch e.Type {
+			case anet.EventCrateHit:
+				hit = &e
+			case anet.EventCrateBroken:
+				brk = &e
+			}
+		}
+		return brk != nil
+	})
+	if hit == nil || hit.Obstacle != 0 || hit.HP != 0 || brk.Obstacle != 0 || brk.X != 400 || brk.Y != 300 {
+		t.Fatalf("crateHit = %+v, crateBroken = %+v; want obstacle 0, hp 0, центр (400,300)", hit, brk)
+	}
+	if len(got.Crates) != 1 || got.Crates[0] != (anet.Crate{I: 0, HP: 0}) {
+		t.Fatalf("crates = %+v, want [{0 0}]", got.Crates)
+	}
+
+	cb := newFakeClient(1024)
+	b := join(t, rm, cb)
+	if w := cb.welcome(t); w.CrateHits != 1 || len(w.Obstacles) != 1 {
+		t.Fatalf("welcome вошедшего позже: %+v", w)
+	}
+	late := cb.snapshotUntil(t, func(s anet.Snapshot) bool { return hasPlayer(s, b) })
+	if len(late.Crates) != 1 || late.Crates[0].HP != 0 {
+		t.Fatalf("вошедший позже не видит сломанный ящик: crates = %+v", late.Crates)
+	}
+}

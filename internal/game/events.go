@@ -10,6 +10,9 @@ const (
 	EventBulletHit EventType = "bulletHit" // пуля ударилась о стену, границу мира или неуязвимого игрока: Pos
 	EventPickup    EventType = "pickup"    // игрок подобрал пикап: Player, Pickup
 	EventRespawn   EventType = "respawn"   // игрок возродился: Player, Pos
+
+	EventCrateHit    EventType = "crateHit"    // пуля попала в целый ящик: Obstacle, HP (остаток), Pos
+	EventCrateBroken EventType = "crateBroken" // ящик сломан (после своего crateHit): Obstacle, Pos (центр ящика)
 )
 
 // Event — одномоментное событие тика. Снапшот передаёт состояние, а не то,
@@ -20,12 +23,14 @@ const (
 // каждое попадает ровно в один тик. Порядок — порядок возникновения
 // (детерминирован: игроки и пули обходятся в фиксированном порядке).
 type Event struct {
-	Type    EventType
-	Pos     Vec2       // hit, shot, bulletHit, respawn
-	Target  PlayerID   // hit, kill
-	Shooter PlayerID   // hit, kill
-	Player  PlayerID   // shot, pickup, respawn
-	Pickup  PickupType // pickup
+	Type     EventType
+	Pos      Vec2       // hit, shot, bulletHit, respawn, crateHit, crateBroken
+	Target   PlayerID   // hit, kill
+	Shooter  PlayerID   // hit, kill
+	Player   PlayerID   // shot, pickup, respawn
+	Pickup   PickupType // pickup
+	Obstacle int        // crateHit, crateBroken: индекс в cfg.Obstacles
+	HP       int        // crateHit: прочность ящика после попадания
 }
 
 func (w *World) emit(e Event) { w.events = append(w.events, e) }

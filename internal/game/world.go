@@ -132,7 +132,8 @@ type Snapshot struct {
 	Players []PlayerState
 	Bullets []BulletState
 	Events  []Event
-	Pickups []Pickup // по возрастанию ID
+	Pickups []Pickup     // по возрастанию ID
+	Crates  []CrateState // повреждённые и сломанные ящики по возрастанию индекса; nil — все целые
 	Round   RoundState
 }
 
@@ -194,6 +195,11 @@ type Config struct {
 	MaxAmmoPickups     int     // ammo одновременно на карте
 	AmmoBasePlayers    int     // на сколько игроков рассчитаны интервал и лимит ammo
 
+	// Ящики (Obstacle.Kind == crate) ломаются после CrateHits попаданий пуль и
+	// восстанавливаются в начале раунда (см. crates.go). CrateHits ≤ 0 — ящики
+	// неразрушимы, как кирпич.
+	CrateHits int
+
 	// Рывок: импульс DashSpeed, линейно затухающий за DashDuration; повтор
 	// не раньше чем через DashCooldown. DashDuration ≤ 0 отключает рывок.
 	DashSpeed    float64 // единиц в секунду в начале рывка
@@ -225,6 +231,7 @@ func DefaultConfig() Config {
 		PickupMinPickupDist: 60, PickupEdgeMargin: 50,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
 		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10, AmmoPickupInterval: 5, MaxAmmoPickups: 2, AmmoBasePlayers: 2,
+		CrateHits: 5,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 		RespawnDelay: 3, RespawnMinKillerDist: 150, InvulnTime: 1,
 	}
@@ -253,6 +260,8 @@ type World struct {
 	nextPickup  PickupID
 	pickupTimer float64 // секунд до следующего появления health/speed
 	ammoTimer   float64 // секунд до следующего появления ammo
+
+	crateHP []int // прочность препятствий параллельно cfg.Obstacles (crates.go)
 }
 
 // NewWorld создаёт пустой мир; первый раунд начинается сразу. Случайность
@@ -266,6 +275,7 @@ func NewWorld(cfg Config) *World {
 		timeLeft:    max(cfg.RoundTime, 0),
 		pickupTimer: cfg.PickupInterval,
 		ammoTimer:   cfg.AmmoPickupInterval,
+		crateHP:     newCrateHP(cfg),
 	}
 }
 
@@ -463,7 +473,7 @@ func (w *World) endRound(ids []PlayerID) {
 
 // startRound начинает новый раунд: у всех полное HP и нулевой счёт, мёртвые
 // оживают, все респавнятся в случайных свободных точках с неуязвимостью, пули,
-// пикапы и вооружение сбрасываются.
+// пикапы и вооружение сбрасываются, сломанные ящики восстанавливаются.
 func (w *World) startRound() {
 	w.phase = PhasePlay
 	w.timeLeft = max(w.cfg.RoundTime, 0)
@@ -471,6 +481,7 @@ func (w *World) startRound() {
 	clear(w.bullets)
 	w.bullets = w.bullets[:0]
 	w.resetPickups()
+	w.resetCrates()
 	for _, id := range w.sortedIDs() { // порядок по ID — детерминированный rng
 		p := w.players[id]
 		p.HP = StartHP
@@ -499,14 +510,20 @@ func (w *World) move(pos, d Vec2) Vec2 {
 	lo, hi := w.bounds()
 	if d.X != 0 {
 		x := clamp(pos.X+d.X, lo.X, hi.X)
-		for _, o := range w.cfg.Obstacles {
+		for i, o := range w.cfg.Obstacles {
+			if w.broken(i) {
+				continue
+			}
 			x = sweepAxis(pos.X, x, pos.Y, o.X, o.X+o.W, o.Y, o.Y+o.H, r)
 		}
 		pos.X = x
 	}
 	if d.Y != 0 {
 		y := clamp(pos.Y+d.Y, lo.Y, hi.Y)
-		for _, o := range w.cfg.Obstacles {
+		for i, o := range w.cfg.Obstacles {
+			if w.broken(i) {
+				continue
+			}
 			y = sweepAxis(pos.Y, y, pos.X, o.Y, o.Y+o.H, o.X, o.X+o.W, r)
 		}
 		pos.Y = y
@@ -556,7 +573,10 @@ func (w *World) isFree(p Vec2) bool {
 // circleFree — то же для круга произвольного радиуса (например, пикапа).
 func (w *World) circleFree(p Vec2, radius float64) bool {
 	r := radius - contactEps
-	for _, o := range w.cfg.Obstacles {
+	for i, o := range w.cfg.Obstacles {
+		if w.broken(i) {
+			continue
+		}
 		dx := p.X - clamp(p.X, o.X, o.X+o.W)
 		dy := p.Y - clamp(p.Y, o.Y, o.Y+o.H)
 		if dx*dx+dy*dy < r*r {
@@ -569,13 +589,23 @@ func (w *World) circleFree(p Vec2, radius float64) bool {
 // firstObstacleT возвращает параметр t∈[0, 1] самой ранней встречи пули на пути
 // from → to с каким-либо препятствием.
 func (w *World) firstObstacleT(from, to Vec2) (float64, bool) {
-	best, found := math.Inf(1), false
-	for _, o := range w.cfg.Obstacles {
+	t, _, ok := w.firstObstacle(from, to)
+	return t, ok
+}
+
+// firstObstacle — то же плюс индекс препятствия в cfg.Obstacles. Сломанные
+// ящики пропускаются.
+func (w *World) firstObstacle(from, to Vec2) (float64, int, bool) {
+	best, idx, found := math.Inf(1), -1, false
+	for i, o := range w.cfg.Obstacles {
+		if w.broken(i) {
+			continue
+		}
 		if t, ok := segmentRectT(from, to, o, w.cfg.BulletRadius); ok && t < best {
-			best, found = t, true
+			best, idx, found = t, i, true
 		}
 	}
-	return best, found
+	return best, idx, found
 }
 
 // segmentRectT — пересечение отрезка from → to с прямоугольником o, расширенным
@@ -641,12 +671,15 @@ func (w *World) updateBullets(dt float64, ids []PlayerID) {
 		b.ttl -= dt
 
 		target, at, tHit, hit := w.firstHit(b.Owner, from, to, ids)
-		if tWall, wall := w.firstObstacleT(from, to); wall && (!hit || tWall < tHit) {
+		if tWall, wi, wall := w.firstObstacle(from, to); wall && (!hit || tWall < tHit) {
 			// Пуля разбилась о препятствие; Pos — центр пули в момент касания.
-			w.emit(Event{Type: EventBulletHit, Pos: Vec2{
-				X: from.X + (to.X-from.X)*tWall,
-				Y: from.Y + (to.Y-from.Y)*tWall,
-			}})
+			// О целый ящик — минус прочность (crateHit/crateBroken), иначе bulletHit.
+			at := Vec2{X: from.X + (to.X-from.X)*tWall, Y: from.Y + (to.Y-from.Y)*tWall}
+			if w.destructible(wi) {
+				w.damageCrate(wi, at)
+			} else {
+				w.emit(Event{Type: EventBulletHit, Pos: at})
+			}
 			continue
 		}
 		if hit {
@@ -820,6 +853,7 @@ func (w *World) Snapshot() Snapshot {
 		Bullets: bs,
 		Events:  slices.Clone(w.events),
 		Pickups: slices.Clone(w.pickups), // ID растут при добавлении, порядок сохраняется
+		Crates:  w.crateStates(),
 		Round:   round,
 	}
 }
