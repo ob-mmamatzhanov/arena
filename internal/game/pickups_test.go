@@ -302,3 +302,84 @@ func TestPickupsClearedOnNewRound(t *testing.T) {
 		t.Fatal("speed boost survived round restart")
 	}
 }
+
+// Поток ammo масштабируется числом игроков: до AmmoBasePlayers — как в конфиге,
+// дальше интервал ×base/n, лимит ×n/base вверх (патронов на игрока как в дуэли).
+func TestAmmoStreamScalesWithPlayers(t *testing.T) {
+	cfg := DefaultConfig() // 5 с, 2 коробки на 2 игроков
+	w := NewWorld(cfg)
+	tests := []struct {
+		n        int
+		interval float64
+		limit    int
+	}{
+		{0, 5, 2}, {1, 5, 2}, {2, 5, 2},
+		{3, 5 * 2.0 / 3, 3}, // 2·3/2 = 3
+		{5, 2, 5},           // 2·5/2 = 5
+		{8, 1.25, 8},
+	}
+	for _, tc := range tests {
+		iv, lim := w.ammoStream(tc.n)
+		if math.Abs(iv-tc.interval) > 1e-9 || lim != tc.limit {
+			t.Errorf("n=%d: интервал %.3f, лимит %d; want %.3f, %d", tc.n, iv, lim, tc.interval, tc.limit)
+		}
+	}
+
+	cfg.AmmoBasePlayers = 0 // масштабирование выключено
+	w = NewWorld(cfg)
+	if iv, lim := w.ammoStream(8); iv != cfg.AmmoPickupInterval || lim != cfg.MaxAmmoPickups {
+		t.Errorf("без AmmoBasePlayers при 8 игроках: %.2f, %d; want как в конфиге", iv, lim)
+	}
+}
+
+// Бой 8 человек на большой арене: патроны появляются в 4 раза чаще и до 8
+// коробок на карте — все находят место в зонах ammo этой карты.
+func TestAmmoForEightPlayersOnLargeMap(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Map = ArenaLargeMap()
+	cfg.Seed = 7
+	w := NewWorld(cfg)
+	for id := PlayerID(1); id <= 8; id++ {
+		w.AddPlayer(id)
+	}
+	// 1.25 с на коробку: через 5 с — 4 (при 2 игроках была бы ещё 1).
+	tickN(w, 5*20)
+	if n := w.countPickups(true); n != 4 {
+		t.Fatalf("ammo через 5 с при 8 игроках = %d, want 4", n)
+	}
+	// Через 12 с — упор в лимит 8; все в зонах ammo.
+	tickN(w, 7*20)
+	if n := w.countPickups(true); n != 8 {
+		t.Fatalf("ammo через 12 с при 8 игроках = %d, want лимит 8", n)
+	}
+	for _, pk := range w.pickups {
+		if pk.Type != PickupAmmo {
+			continue
+		}
+		in := false
+		for _, z := range cfg.PickupZones[PickupAmmo] {
+			in = in || z.contains(pk.Pos)
+		}
+		if !in {
+			t.Errorf("ammo %v вне зон патронов", pk.Pos)
+		}
+	}
+}
+
+// Карта по вместимости комнаты: до LargeMapMinPlayers — разреженная арена,
+// с неё — арена с дополнительными укрытиями.
+func TestMapForPlayers(t *testing.T) {
+	for n, want := range map[int]string{2: "arena", 4: "arena", 5: "arena-large", 8: "arena-large"} {
+		if got := MapForPlayers(n).Name; got != want {
+			t.Errorf("MapForPlayers(%d) = %s, want %s", n, got, want)
+		}
+	}
+	small, large := ArenaMap(), ArenaLargeMap()
+	if len(large.Obstacles) <= len(small.Obstacles) {
+		t.Errorf("на большой арене укрытий %d, на обычной %d", len(large.Obstacles), len(small.Obstacles))
+	}
+	// ArenaLargeMap не меняет общую ArenaMap (срезы и карта зон скопированы).
+	if len(ArenaMap().Obstacles) != len(small.Obstacles) || len(ArenaMap().PickupZones[PickupAmmo]) != 2 {
+		t.Error("ArenaLargeMap изменила ArenaMap")
+	}
+}

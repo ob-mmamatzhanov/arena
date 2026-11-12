@@ -181,11 +181,18 @@ type Config struct {
 	// стрельба не ограничена. Пикапы ammo идут отдельным потоком со своим
 	// таймером и лимитом, чтобы не ждать в очереди за health/speed.
 	// AmmoPickupInterval ≤ 0 отключает их появление.
+	//
+	// AmmoPickupInterval и MaxAmmoPickups заданы на AmmoBasePlayers игроков.
+	// Когда в комнате больше игроков n, поток растёт пропорционально: интервал
+	// ×base/n, лимит на карте ×n/base (вверх) — патронов на игрока столько же,
+	// сколько в дуэли, и в бою 8 человек магазины не пустеют у всех сразу.
+	// AmmoBasePlayers ≤ 0 отключает масштабирование.
 	StartAmmo          int
 	MaxAmmo            int
 	AmmoAmount         int
 	AmmoPickupInterval float64 // секунд между появлениями ammo
 	MaxAmmoPickups     int     // ammo одновременно на карте
+	AmmoBasePlayers    int     // на сколько игроков рассчитаны интервал и лимит ammo
 
 	// Рывок: импульс DashSpeed, линейно затухающий за DashDuration; повтор
 	// не раньше чем через DashCooldown. DashDuration ≤ 0 отключает рывок.
@@ -217,7 +224,7 @@ func DefaultConfig() Config {
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
 		PickupMinPickupDist: 60, PickupEdgeMargin: 50,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
-		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10, AmmoPickupInterval: 5, MaxAmmoPickups: 2,
+		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10, AmmoPickupInterval: 5, MaxAmmoPickups: 2, AmmoBasePlayers: 2,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 		RespawnDelay: 3, RespawnMinKillerDist: 150, InvulnTime: 1,
 	}
