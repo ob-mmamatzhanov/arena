@@ -23,6 +23,13 @@ func TestEventJSONShapes(t *testing.T) {
 			`{"type":"pickup","playerId":3,"pickupType":"health"}`},
 		{Event{Type: EventRespawn, PlayerID: 0, X: 0, Y: 7, TargetID: 2, PickupType: "x"},
 			`{"type":"respawn","playerId":0,"x":0,"y":7}`},
+		// Индекс препятствия 0 и hp 0 законны — поля есть всегда.
+		{Event{Type: EventCrateHit, Obstacle: 0, HP: 0, X: 300, Y: 106, PlayerID: 4},
+			`{"type":"crateHit","obstacle":0,"hp":0,"x":300,"y":106}`},
+		{Event{Type: EventCrateHit, Obstacle: 5, HP: 3, X: 1, Y: 2},
+			`{"type":"crateHit","obstacle":5,"hp":3,"x":1,"y":2}`},
+		{Event{Type: EventCrateBroken, Obstacle: 0, HP: 9, X: 316, Y: 106},
+			`{"type":"crateBroken","obstacle":0,"x":316,"y":106}`},
 	}
 	for _, tt := range tests {
 		got, err := json.Marshal(tt.ev)
@@ -62,5 +69,32 @@ func TestSnapshotOmitsEmptyEvents(t *testing.T) {
 	}
 	if strings.Contains(string(b), `"hits"`) {
 		t.Fatalf("legacy hits field still present: %s", b)
+	}
+}
+
+// crates опускается, пока все ящики целые, и сериализуется {i, hp} с нулями.
+func TestSnapshotCrates(t *testing.T) {
+	for _, cs := range [][]Crate{nil, {}} {
+		b, err := json.Marshal(Snapshot{Type: TypeSnapshot, Crates: cs})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"crates"`) {
+			t.Fatalf("пустой crates сериализован: %s", b)
+		}
+	}
+	b, _ := json.Marshal(Snapshot{Crates: []Crate{{I: 0, HP: 0}, {I: 4, HP: 2}}})
+	if !strings.Contains(string(b), `"crates":[{"i":0,"hp":0},{"i":4,"hp":2}]`) {
+		t.Fatalf("crates: %s", b)
+	}
+}
+
+// crateHits в welcome есть всегда, и с нулём (ящики неразрушимы).
+func TestWelcomeCrateHits(t *testing.T) {
+	for n, want := range map[int]string{0: `"crateHits":0`, 5: `"crateHits":5`} {
+		b, _ := json.Marshal(Welcome{Type: TypeWelcome, CrateHits: n})
+		if !strings.Contains(string(b), want) {
+			t.Errorf("CrateHits=%d: %s", n, b)
+		}
 	}
 }

@@ -69,8 +69,12 @@ type Welcome struct {
 	PlayerSpeed  float64 `json:"speed"` // единиц в секунду
 	PlayerRadius float64 `json:"radius"`
 	// Obstacles статичны, поэтому отдаются один раз здесь и не дублируются
-	// в снапшотах. Всегда массив (не null).
+	// в снапшотах. Всегда массив (не null). Индекс в массиве — номер препятствия
+	// в событиях crateHit/crateBroken и в snapshot.crates.
 	Obstacles []Obstacle `json:"obstacles"`
+	// CrateHits — сколько попаданий выдерживает целый ящик (kind "crate");
+	// 0 — ящики неразрушимы. Нужен клиенту для отрисовки повреждений.
+	CrateHits int `json:"crateHits"`
 }
 
 // Obstacle — препятствие карты: левый верхний угол (x, y), ширина w, высота h,
@@ -123,20 +127,26 @@ const (
 	EventBulletHit = "bulletHit"
 	EventPickup    = "pickup"
 	EventRespawn   = "respawn"
+
+	EventCrateHit    = "crateHit"
+	EventCrateBroken = "crateBroken"
 )
 
 // Event — одномоментное событие тика этого снапшота. У каждого типа свой
 // набор полей (MarshalJSON пишет только их):
 //
-//	hit:       {type, x, y, targetId, shooterId}
-//	kill:      {type, targetId, shooterId}
-//	shot:      {type, playerId, x, y}
-//	bulletHit: {type, x, y}            — пуля ударилась о стену, границу или неуязвимого игрока
-//	pickup:    {type, playerId, pickupType}
-//	respawn:   {type, playerId, x, y}
+//	hit:         {type, x, y, targetId, shooterId}
+//	kill:        {type, targetId, shooterId}
+//	shot:        {type, playerId, x, y}
+//	bulletHit:   {type, x, y}            — пуля ударилась о стену, границу или неуязвимого игрока
+//	pickup:      {type, playerId, pickupType}
+//	respawn:     {type, playerId, x, y}
+//	crateHit:    {type, obstacle, hp, x, y} — пуля попала в целый ящик и погасла; hp — остаток
+//	crateBroken: {type, obstacle, x, y}     — ящик сломан (x, y — его центр); идёт после своего crateHit
 //
-// Теги нужны для разбора (клиенты на Go, тесты); omitempty на числах не
-// годится — координата 0 и ID законны, поэтому форма задаётся типом.
+// obstacle — индекс в welcome.obstacles. Теги нужны для разбора (клиенты на
+// Go, тесты); omitempty на числах не годится — координата 0, ID и индекс 0
+// законны, поэтому форма задаётся типом.
 type Event struct {
 	Type       string  `json:"type"`
 	X          float64 `json:"x"`
@@ -145,6 +155,8 @@ type Event struct {
 	ShooterID  uint32  `json:"shooterId"`
 	PlayerID   uint32  `json:"playerId"`
 	PickupType string  `json:"pickupType"`
+	Obstacle   int     `json:"obstacle"`
+	HP         int     `json:"hp"`
 }
 
 // MarshalJSON сериализует только поля, относящиеся к типу события.
@@ -184,6 +196,19 @@ func (e Event) MarshalJSON() ([]byte, error) {
 			PlayerID   uint32 `json:"playerId"`
 			PickupType string `json:"pickupType"`
 		}{e.Type, e.PlayerID, e.PickupType})
+	case EventCrateHit:
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			Obstacle int    `json:"obstacle"`
+			HP       int    `json:"hp"`
+			xy
+		}{e.Type, e.Obstacle, e.HP, xy{e.X, e.Y}})
+	case EventCrateBroken:
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			Obstacle int    `json:"obstacle"`
+			xy
+		}{e.Type, e.Obstacle, xy{e.X, e.Y}})
 	}
 	return nil, fmt.Errorf("net: unknown event type %q", e.Type)
 }
@@ -217,7 +242,7 @@ type Score struct {
 
 // Snapshot — состояние мира, рассылаемое всем клиентам каждый тик.
 // Bullets и Pickups всегда сериализуются массивами (не null);
-// events без событий в тике опускается целиком.
+// events без событий в тике и crates без повреждённых ящиков опускаются целиком.
 type Snapshot struct {
 	Type    string        `json:"type"`
 	Tick    uint64        `json:"tick"`
@@ -225,7 +250,16 @@ type Snapshot struct {
 	Bullets []BulletState `json:"bullets"`
 	Events  []Event       `json:"events,omitempty"`
 	Pickups []Pickup      `json:"pickups"`
+	Crates  []Crate       `json:"crates,omitempty"`
 	Round   Round         `json:"round"`
+}
+
+// Crate — повреждённый или сломанный ящик: i — индекс в welcome.obstacles,
+// hp — оставшаяся прочность (0 — сломан, его нет ни для пуль, ни для движения).
+// Ящики, которых нет в snapshot.crates, целые; в начале раунда все снова целые.
+type Crate struct {
+	I  int `json:"i"`
+	HP int `json:"hp"`
 }
 
 // Типы пикапов (поле pickup.type).

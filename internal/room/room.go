@@ -342,6 +342,7 @@ func (r *Room) handleJoin(req joinReq) {
 		PlayerSpeed:  cfg.PlayerSpeed,
 		PlayerRadius: cfg.PlayerRadius,
 		Obstacles:    obstacles,
+		CrateHits:    max(cfg.CrateHits, 0),
 	})
 	if err == nil && !cl.conn.TrySend(welcome) {
 		err = anet.ErrClosed
@@ -508,7 +509,15 @@ func (r *Room) broadcast(s game.Snapshot) {
 				ShooterID:  uint32(e.Shooter),
 				PlayerID:   uint32(e.Player),
 				PickupType: string(e.Pickup),
+				Obstacle:   e.Obstacle,
+				HP:         e.HP,
 			}
+		}
+	}
+	if len(s.Crates) > 0 { // nil → поле crates опускается (omitempty)
+		msg.Crates = make([]anet.Crate, len(s.Crates))
+		for i, c := range s.Crates {
+			msg.Crates[i] = anet.Crate{I: c.Index, HP: c.HP}
 		}
 	}
 	for i, pk := range s.Pickups {
