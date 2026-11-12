@@ -232,8 +232,7 @@ func DefaultConfig() Config {
 	return Config{
 		Map:         DefaultMap(),
 		PlayerSpeed: 200, PlayerRadius: 12, HitRadius: 12,
-		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
-		FireHoldTime: 0.1, // тик ввода + один пропущенный тик при 20 Гц
+		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25, FireHoldTime: 0.1,
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
