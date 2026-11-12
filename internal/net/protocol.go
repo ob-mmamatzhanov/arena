@@ -53,6 +53,7 @@ type Welcome struct {
 	Type     string `json:"type"`
 	PlayerID uint32 `json:"playerId"`
 	Room     string `json:"room"`
+	Mode     string `json:"mode"` // режим комнаты: arena, zombie
 	TickRate int    `json:"tickRate"`
 	// Профиль игрока после проверки сервером: итоговое имя, индекс цвета и
 	// ключ (сгенерированный, если клиент не прислал корректный) — клиенту

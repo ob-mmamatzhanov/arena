@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
+	"sync/atomic"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -21,8 +23,12 @@ import (
 )
 
 const (
-	TickRate   = 20
+	TickRate = 20
+	// MaxPlayers — верхняя граница вместимости любой комнаты; конкретная
+	// комната может быть меньше (WithMaxPlayers).
 	MaxPlayers = 8
+	// DefaultMode — режим комнаты, если он не задан опцией WithMode.
+	DefaultMode = "arena"
 
 	tickDT       = 1.0 / TickRate
 	inputsBuffer = MaxPlayers * 32
@@ -73,10 +79,27 @@ type scoreUpdate struct {
 	score     int
 }
 
+// retiredSeats — значение seats у списанной комнаты (Retire): заведомо
+// отрицательное, чтобы освобождение мест после списания не вернуло его к нулю.
+const retiredSeats = math.MinInt32 / 2
+
 // Room — игровая комната на 2–8 игроков.
 type Room struct {
-	name string
-	log  *slog.Logger
+	name       string
+	mode       string
+	maxPlayers int
+	log        *slog.Logger
+	onTick     func(time.Duration) // nil — длительность тика не измеряется
+
+	// Ниже — состояние, которое комната публикует наружу без блокировок:
+	// его читают менеджер комнат и HTTP-обработчики из других горутин.
+	//
+	// seats — занятые и зарезервированные места (Reserve). Резерв берётся
+	// снаружи CAS-ом, освобождается либо неудачным JoinReserved, либо
+	// горутиной Run при уходе игрока. Отрицательное — комната списана.
+	seats   atomic.Int32
+	players atomic.Int32 // подключённые игроки (len(clients)); пишет только Run
+	phase   atomic.Value // game.Phase; пишет только Run при смене фазы
 
 	join   chan joinReq
 	leave  chan game.PlayerID
@@ -95,16 +118,53 @@ type Room struct {
 	pendingJoins  []game.PlayerID
 	pendingLeaves []game.PlayerID
 	pendingInputs map[game.PlayerID]game.Input
+	lastPhase     game.Phase
 }
+
+// Option настраивает комнату при создании.
+type Option func(*options)
+
+type options struct {
+	mode       string
+	maxPlayers int
+	cfg        *game.Config
+	onTick     func(time.Duration)
+}
+
+// WithMode задаёт режим комнаты (по умолчанию DefaultMode). Комната только
+// хранит его и сообщает клиенту в Welcome; правила режима задаются конфигом
+// мира (WithGameConfig).
+func WithMode(mode string) Option { return func(o *options) { o.mode = mode } }
+
+// WithMaxPlayers ограничивает вместимость комнаты; значение приводится к 1…MaxPlayers.
+func WithMaxPlayers(n int) Option { return func(o *options) { o.maxPlayers = n } }
+
+// WithGameConfig задаёт конфиг мира вместо game.DefaultConfig(). Seed
+// всё равно берётся от времени: разные комнаты — разные респавны.
+func WithGameConfig(cfg game.Config) Option { return func(o *options) { o.cfg = &cfg } }
+
+// WithTickObserver передаёт длительность каждого тика в f. f вызывается из
+// горутины комнаты и не должен блокироваться.
+func WithTickObserver(f func(time.Duration)) Option { return func(o *options) { o.onTick = f } }
 
 // New создаёт комнату. Её нужно запустить через Run. Фраги игроков
 // записываются в lb; nil — без таблицы лидеров.
-func New(name string, lb leaderboard.Store, log *slog.Logger) *Room {
+func New(name string, lb leaderboard.Store, log *slog.Logger, opts ...Option) *Room {
+	o := options{mode: DefaultMode, maxPlayers: MaxPlayers}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	cfg := game.DefaultConfig()
+	if o.cfg != nil {
+		cfg = *o.cfg
+	}
 	cfg.Seed = uint64(time.Now().UnixNano()) // разные комнаты/запуски — разные респавны
-	return &Room{
+	r := &Room{
 		name:          name,
+		mode:          o.mode,
+		maxPlayers:    min(max(o.maxPlayers, 1), MaxPlayers),
 		log:           log.With("room", name),
+		onTick:        o.onTick,
 		join:          make(chan joinReq),
 		leave:         make(chan game.PlayerID, MaxPlayers),
 		inputs:        make(chan anet.PlayerInput, inputsBuffer),
@@ -115,27 +175,86 @@ func New(name string, lb leaderboard.Store, log *slog.Logger) *Room {
 		clients:       make(map[game.PlayerID]*client, MaxPlayers),
 		pendingInputs: make(map[game.PlayerID]game.Input, MaxPlayers),
 	}
+	r.lastPhase = r.world.Phase()
+	r.phase.Store(r.lastPhase)
+	return r
 }
 
-// Name возвращает имя комнаты.
+// Name возвращает имя (ID) комнаты.
 func (r *Room) Name() string { return r.name }
+
+// Mode возвращает режим комнаты.
+func (r *Room) Mode() string { return r.mode }
+
+// MaxPlayers возвращает вместимость комнаты.
+func (r *Room) MaxPlayers() int { return r.maxPlayers }
+
+// Players возвращает число подключённых игроков. Безопасен из любой горутины.
+func (r *Room) Players() int { return int(r.players.Load()) }
+
+// Seats возвращает число занятых и зарезервированных мест (0 у списанной
+// комнаты). Безопасен из любой горутины.
+func (r *Room) Seats() int { return max(int(r.seats.Load()), 0) }
+
+// Phase возвращает текущую фазу раунда. Безопасен из любой горутины.
+func (r *Room) Phase() game.Phase { return r.phase.Load().(game.Phase) }
 
 // Done закрывается после остановки комнаты.
 func (r *Room) Done() <-chan struct{} { return r.done }
 
-// Join регистрирует соединение в комнате с профилем из сообщения join и
-// возвращает ID игрока. Welcome кладётся в очередь отправки соединения до возврата.
+// Reserve занимает место под будущий JoinReserved. ErrFull — мест нет,
+// ErrClosed — комната списана (Retire). Неиспользованный резерв нужно
+// вернуть через Unreserve.
+func (r *Room) Reserve() error {
+	for {
+		n := r.seats.Load()
+		if n < 0 {
+			return ErrClosed
+		}
+		if int(n) >= r.maxPlayers {
+			return ErrFull
+		}
+		if r.seats.CompareAndSwap(n, n+1) {
+			return nil
+		}
+	}
+}
+
+// Unreserve возвращает место, занятое Reserve и не использованное в JoinReserved.
+func (r *Room) Unreserve() { r.releaseSeat() }
+
+// Retire списывает комнату, если в ней нет ни игроков, ни резервов: после
+// этого Reserve всегда возвращает ErrClosed. Так менеджер удаляет пустую
+// комнату без гонки с игроком, который как раз в неё заходит.
+func (r *Room) Retire() bool { return r.seats.CompareAndSwap(0, retiredSeats) }
+
+// Join занимает место (Reserve) и подключает соединение — см. JoinReserved.
 func (r *Room) Join(ctx context.Context, c Client, j anet.Join) (uint32, error) {
+	if err := r.Reserve(); err != nil {
+		return 0, err
+	}
+	return r.JoinReserved(ctx, c, j)
+}
+
+// JoinReserved регистрирует соединение в комнате на месте, занятом Reserve,
+// с профилем из сообщения join и возвращает ID игрока. Welcome кладётся в
+// очередь отправки соединения до возврата. При ошибке место освобождается.
+func (r *Room) JoinReserved(ctx context.Context, c Client, j anet.Join) (uint32, error) {
 	req := joinReq{conn: c, join: j, reply: make(chan joinResult, 1)}
 	select {
 	case r.join <- req:
 	case <-r.done:
+		r.Unreserve()
 		return 0, ErrClosed
 	case <-ctx.Done():
+		r.Unreserve()
 		return 0, ctx.Err()
 	}
 	// Комната отвечает сразу при приёме запроса, ответ буферизован.
 	res := <-req.reply
+	if res.err != nil {
+		r.Unreserve()
+	}
 	return uint32(res.id), res.err
 }
 
@@ -169,7 +288,7 @@ func (r *Room) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second / TickRate)
 	defer ticker.Stop()
 
-	r.log.Info("room started", "tickRate", TickRate, "maxPlayers", MaxPlayers)
+	r.log.Info("room started", "mode", r.mode, "tickRate", TickRate, "maxPlayers", r.maxPlayers)
 	for {
 		select {
 		case <-ctx.Done():
@@ -189,7 +308,7 @@ func (r *Room) Run(ctx context.Context) {
 
 // handleJoin резервирует слот и отправляет Welcome. В мир игрок попадёт на ближайшем тике.
 func (r *Room) handleJoin(req joinReq) {
-	if len(r.clients) >= MaxPlayers {
+	if len(r.clients) >= r.maxPlayers { // при честных резервах не случается
 		req.reply <- joinResult{err: ErrFull}
 		return
 	}
@@ -201,6 +320,7 @@ func (r *Room) handleJoin(req joinReq) {
 		color: pickColor(r.clients), // до добавления себя
 	}}
 	r.clients[id] = cl
+	r.players.Store(int32(len(r.clients)))
 	r.pendingJoins = append(r.pendingJoins, id)
 
 	cfg := r.world.Config()
@@ -212,6 +332,7 @@ func (r *Room) handleJoin(req joinReq) {
 		Type:         anet.TypeWelcome,
 		PlayerID:     uint32(id),
 		Room:         r.name,
+		Mode:         r.mode,
 		TickRate:     TickRate,
 		Name:         cl.name,
 		Color:        cl.color,
@@ -236,10 +357,29 @@ func (r *Room) handleLeave(id game.PlayerID) {
 	if _, ok := r.clients[id]; !ok {
 		return // уже удалён (например, дропнут как медленный)
 	}
-	delete(r.clients, id)
-	delete(r.pendingInputs, id)
+	r.removeClient(id)
 	r.pendingLeaves = append(r.pendingLeaves, id)
 	r.log.Info("player left", "player", id, "clients", len(r.clients))
+}
+
+// removeClient забывает клиента и освобождает его место. Из мира игрока
+// убирает вызывающий: сразу или на следующем тике.
+func (r *Room) removeClient(id game.PlayerID) {
+	delete(r.clients, id)
+	delete(r.pendingInputs, id)
+	r.players.Store(int32(len(r.clients)))
+	r.releaseSeat()
+}
+
+// releaseSeat освобождает одно место. У списанной комнаты и у клиента,
+// добавленного в обход Reserve (тесты), счётчик не уходит ниже нуля.
+func (r *Room) releaseSeat() {
+	for {
+		n := r.seats.Load()
+		if n <= 0 || r.seats.CompareAndSwap(n, n-1) {
+			return
+		}
+	}
 }
 
 // bufferInput сохраняет самый свежий (по seq) ввод игрока до следующего тика.
@@ -270,6 +410,10 @@ func (r *Room) bufferInput(pi anet.PlayerInput) {
 
 // tick — единственное место, где мутирует игровой мир.
 func (r *Room) tick() {
+	if r.onTick != nil {
+		start := time.Now()
+		defer func() { r.onTick(time.Since(start)) }()
+	}
 	for _, id := range r.pendingJoins {
 		r.world.AddPlayer(id)
 	}
@@ -282,6 +426,10 @@ func (r *Room) tick() {
 
 	r.world.Update(tickDT, r.pendingInputs)
 	clear(r.pendingInputs)
+	if p := r.world.Phase(); p != r.lastPhase { // Store только при смене: без аллокаций в каждом тике
+		r.lastPhase = p
+		r.phase.Store(p)
+	}
 
 	if len(r.clients) == 0 {
 		return // без клиентов нет и стрелков, которым записывать фраги
@@ -419,8 +567,7 @@ func (r *Room) broadcast(s game.Snapshot) {
 		}
 		r.log.Warn("dropping slow client", "player", id)
 		c.conn.Close(websocket.StatusPolicyViolation, "too slow")
-		delete(r.clients, id) // удаление во время range по map допустимо
-		delete(r.pendingInputs, id)
+		r.removeClient(id) // удаление во время range по map допустимо
 		r.world.RemovePlayer(id)
 	}
 }
@@ -438,4 +585,5 @@ func (r *Room) closeAll() {
 		c.conn.Close(websocket.StatusGoingAway, "server shutting down")
 		delete(r.clients, id)
 	}
+	r.players.Store(0)
 }

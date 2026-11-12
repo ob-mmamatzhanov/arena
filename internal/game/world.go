@@ -269,6 +269,9 @@ func (w *World) Config() Config { return w.cfg }
 // Tick возвращает номер последнего выполненного тика.
 func (w *World) Tick() uint64 { return w.tick }
 
+// Phase возвращает текущую фазу раунда.
+func (w *World) Phase() Phase { return w.phase }
+
 // PlayerCount возвращает число игроков в мире.
 func (w *World) PlayerCount() int { return len(w.players) }
 
