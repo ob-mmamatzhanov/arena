@@ -112,10 +112,30 @@ func (w *World) applyPickup(p *Player, pk Pickup) {
 
 // spawnPickups ведёт два независимых потока: health/speed (взвешенно) раз в
 // PickupInterval до MaxPickups на карте и ammo раз в AmmoPickupInterval до
-// MaxAmmoPickups. Порядок потоков фиксирован — общий, затем ammo — ради детерминизма rng.
+// MaxAmmoPickups (с поправкой на число игроков, см. ammoStream). Порядок
+// потоков фиксирован — общий, затем ammo — ради детерминизма rng.
 func (w *World) spawnPickups(dt float64, ids []PlayerID) {
 	w.pickupTimer = w.spawnStream(dt, ids, w.pickupTimer, w.cfg.PickupInterval, w.cfg.MaxPickups, false)
-	w.ammoTimer = w.spawnStream(dt, ids, w.ammoTimer, w.cfg.AmmoPickupInterval, w.cfg.MaxAmmoPickups, true)
+	interval, limit := w.ammoStream(len(ids))
+	// Таймер заряжается базовым интервалом (старт, новый раунд); игроков больше —
+	// отсчёт сразу укорачивается до их интервала, а не после первой коробки.
+	w.ammoTimer = min(w.ammoTimer, interval)
+	w.ammoTimer = w.spawnStream(dt, ids, w.ammoTimer, interval, limit, true)
+}
+
+// ammoStream — интервал и лимит потока ammo для n игроков в комнате. До
+// AmmoBasePlayers включительно — значения конфига как есть; дальше интервал
+// сокращается в n/base раз, а лимит растёт во столько же раз (с округлением
+// вверх), чтобы на игрока приходилось столько же патронов, сколько в дуэли.
+func (w *World) ammoStream(n int) (interval float64, limit int) {
+	interval, limit = w.cfg.AmmoPickupInterval, w.cfg.MaxAmmoPickups
+	base := w.cfg.AmmoBasePlayers
+	if base <= 0 || n <= base {
+		return interval, limit
+	}
+	interval = interval * float64(base) / float64(n)
+	limit = (limit*n + base - 1) / base
+	return interval, limit
 }
 
 // spawnStream — один поток спавна; возвращает новое значение его таймера.

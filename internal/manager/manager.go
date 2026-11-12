@@ -62,14 +62,18 @@ var (
 // ValidMode сообщает, известен ли режим.
 func ValidMode(mode string) bool { return slices.Contains(Modes, mode) }
 
-// gameConfig — конфиг мира для режима. Отдельного zombie-режима в симуляции
-// пока нет: такая комната запускает обычную арену и отличается только меткой.
-func gameConfig(mode string) game.Config {
+// gameConfig — конфиг мира для режима и вместимости комнаты. Карта зависит от
+// вместимости: от game.LargeMapMinPlayers — арена с дополнительными укрытиями
+// (game.MapForPlayers). Отдельного zombie-режима в симуляции пока нет: такая
+// комната запускает обычную арену и отличается только меткой.
+func gameConfig(mode string, maxPlayers int) game.Config {
+	cfg := game.DefaultConfig()
+	cfg.Map = game.MapForPlayers(maxPlayers)
 	switch mode {
 	case ModeZombie:
-		return game.DefaultConfig() // TODO: правила zombie-режима
+		return cfg // TODO: правила zombie-режима
 	default:
-		return game.DefaultConfig()
+		return cfg
 	}
 }
 
@@ -200,7 +204,7 @@ func (m *Manager) createLocked(o Opts) (*entry, error) {
 
 	obs := m.metrics.tickObserver(id)
 	rm := room.New(id, m.store, m.log, room.WithMode(o.Mode), room.WithMaxPlayers(o.MaxPlayers),
-		room.WithGameConfig(gameConfig(o.Mode)),
+		room.WithGameConfig(gameConfig(o.Mode, o.MaxPlayers)),
 		room.WithTickObserver(func(d time.Duration) { obs.Observe(d.Seconds()) }))
 	ctx, cancel := context.WithCancel(context.Background())
 	go rm.Run(ctx)

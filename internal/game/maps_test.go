@@ -7,7 +7,7 @@ import (
 
 // allMaps — все карты игры. Новая карта добавляется сюда и проходит те же проверки.
 func allMaps() []Map {
-	return []Map{ArenaMap()}
+	return []Map{ArenaMap(), ArenaLargeMap()}
 }
 
 // Параметры принципов карты (см. ArenaMap).
@@ -544,7 +544,7 @@ func isMapSpawn(m Map, p Vec2) bool {
 	return false
 }
 
-// Карта в текстовом виде — для отладки: go test -run TestPrintMap -v.
+// Карты в текстовом виде — для отладки: go test -run TestPrintMap -v.
 // Клетка 10×10 px; символ — по тому, что лежит в центре клетки:
 // '#' — стена, 'x' — ящик, 'S' — спавн. Клетка мельче щели между ящиками
 // (16 px), поэтому щель видна.
@@ -552,7 +552,10 @@ func TestPrintMap(t *testing.T) {
 	if !testing.Verbose() {
 		t.Skip("только с -v")
 	}
-	m := ArenaMap()
+	forEachMap(t, func(t *testing.T, m Map) { printMap(t, m) })
+}
+
+func printMap(t *testing.T, m Map) {
 	const step = 10
 	for y := step / 2; y < int(m.Height); y += step {
 		line := make([]byte, 0, int(m.Width)/step)

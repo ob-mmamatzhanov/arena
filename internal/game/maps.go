@@ -81,6 +81,57 @@ func (z Zone) contains(p Vec2) bool {
 // DefaultMap — карта по умолчанию.
 func DefaultMap() Map { return ArenaMap() }
 
+// LargeMapMinPlayers — с какой вместимости комнаты берётся ArenaLargeMap:
+// на разреженной арене 5–8 игрокам негде укрыться, бой сводится к перестрелке
+// в открытую.
+const LargeMapMinPlayers = 5
+
+// MapForPlayers — карта для комнаты вместимостью maxPlayers.
+func MapForPlayers(maxPlayers int) Map {
+	if maxPlayers >= LargeMapMinPlayers {
+		return ArenaLargeMap()
+	}
+	return ArenaMap()
+}
+
+// ArenaLargeMap — арена для 5–8 игроков: та же ArenaMap (спавны, края,
+// центр, пары ящиков) плюс укрытия в пустых полосах между центром и углами —
+// четыре низкие стены 64×16 над и под центром и по ящику в каждой четверти
+// у боковых краёв. Укрытия симметричны поворотом на 180°, проходы между ними
+// не уже 32 px, спавны остаются за угловыми стенами (проверяет maps_test.go).
+//
+// Патронам — ещё по зоне у каждого нового ящика: при 8 игроках поток ammo
+// выдаёт до 8 коробок (см. Config.AmmoBasePlayers), в две зоны у боковых
+// стенок они не помещаются.
+func ArenaLargeMap() Map {
+	m := ArenaMap()
+	m.Name = "arena-large"
+	m.Obstacles = append(m.Obstacles,
+		// Низкие стены над и под центром: укрытие на линиях, где раньше был пустырь.
+		Obstacle{X: 268, Y: 160, W: 64, H: 16},
+		Obstacle{X: 468, Y: 424, W: 64, H: 16},
+		Obstacle{X: 468, Y: 160, W: 64, H: 16},
+		Obstacle{X: 268, Y: 424, W: 64, H: 16},
+
+		// Ящики в четвертях у боковых краёв, между угловой стеной и боковой стенкой.
+		Obstacle{X: 140, Y: 180, W: 32, H: 32, Kind: ObstacleCrate}, // ↖
+		Obstacle{X: 628, Y: 388, W: 32, H: 32, Kind: ObstacleCrate}, // ↘
+		Obstacle{X: 628, Y: 180, W: 32, H: 32, Kind: ObstacleCrate}, // ↗
+		Obstacle{X: 140, Y: 388, W: 32, H: 32, Kind: ObstacleCrate}, // ↙
+	)
+	zones := map[PickupType][]Zone{}
+	for typ, z := range m.PickupZones {
+		zones[typ] = append([]Zone(nil), z...)
+	}
+	// Патроны — ещё и с внутренней стороны каждого нового ящика.
+	zones[PickupAmmo] = append(zones[PickupAmmo],
+		RectZone(185, 175, 50, 50), RectZone(565, 375, 50, 50),
+		RectZone(565, 175, 50, 50), RectZone(185, 375, 50, 50),
+	)
+	m.PickupZones = zones
+	return m
+}
+
 // ArenaMap — разреженная арена 800×600 для дальних перестрелок, симметричная
 // поворотом на 180° вокруг (400, 300): каждому препятствию (x, y, w, h, kind)
 // соответствует (800−x−w, 600−y−h, w, h, kind), каждому спавну (x, y) —

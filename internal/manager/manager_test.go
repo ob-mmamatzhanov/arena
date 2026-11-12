@@ -371,3 +371,13 @@ func TestShutdown(t *testing.T) {
 		t.Fatalf("повторный Shutdown: %v", err)
 	}
 }
+
+// Комнатам на 5–8 игроков (и автозаполнению — оно создаёт комнаты на 8)
+// достаётся арена с дополнительными укрытиями, комнатам поменьше — обычная.
+func TestGameConfigMapByCapacity(t *testing.T) {
+	for n, want := range map[int]string{2: "arena", 4: "arena", 5: "arena-large", room.MaxPlayers: "arena-large"} {
+		if got := gameConfig(ModeArena, n).Map.Name; got != want {
+			t.Errorf("gameConfig(arena, %d).Map = %s, want %s", n, got, want)
+		}
+	}
+}
