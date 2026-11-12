@@ -1,5 +1,5 @@
 // Package cors — CORS для HTTP-ручек с той же проверкой Origin, что у
-// WebSocket (nhooyr.io/websocket): разрешены собственный хост сервера и
+// WebSocket (github.com/coder/websocket): разрешены собственный хост сервера и
 // хосты, подходящие под шаблоны из -origins.
 package cors
 
@@ -26,7 +26,7 @@ func Allow(w http.ResponseWriter, r *http.Request, patterns []string) bool {
 	return true
 }
 
-// Allowed повторяет проверку Origin в nhooyr.io/websocket: хост из Origin
+// Allowed повторяет проверку Origin в github.com/coder/websocket: хост из Origin
 // совпадает с хостом запроса или подходит под один из шаблонов (path.Match
 // без учёта регистра, например "localhost:*").
 func Allowed(origin, host string, patterns []string) bool {
