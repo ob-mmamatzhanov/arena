@@ -9,12 +9,13 @@ go build ./... && go vet ./... && go test ./...      # стандартная п
 go test -race ./...                                    # room/net конкурентны — прогнать перед push
 go test ./internal/game -run TestDashImpulse -v        # отдельный тест
 go test ./internal/game -run '^$' -bench BenchmarkUpdate8Players100Bullets -benchmem
-go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws, health на GET /healthz, топ на GET /leaderboard
+go run ./cmd/server -addr :8080 -origins localhost:5173   # WS на GET /ws?room=|?mode=, /rooms, /metrics, /healthz, /leaderboard
+                                                          # -ip-header: заголовок прокси с IP клиента для лимита POST /rooms (прод — Fly-Client-IP)
                                                           # -redis (по умолчанию $REDIS_URL): пусто или Redis недоступен — таблица в памяти
 go test ./internal/game -run TestPrintMap -v           # ASCII-схема карты: '#' стена, 'x' ящик, 'S' спавн
 ```
 
-**Push в `master` = деплой в прод.** `.github/workflows/deploy.yml` на каждый push в `master` гоняет `go vet` + `go test -race` и затем `flyctl deploy` (приложение `arena-ob`, `fly.toml`). Разрешённые `Origin` продакшена заданы дважды — в `CMD` у `Dockerfile` и в `[processes]` у `fly.toml`; менять нужно оба.
+**Push в `master` = деплой в прод.** `.github/workflows/deploy.yml` на каждый push в `master` гоняет `go vet` + `go test -race` и затем `flyctl deploy` (приложение `arena-ob`, `fly.toml`). Флаги продакшена (`-origins`, `-ip-header`) заданы дважды — в `CMD` у `Dockerfile` и в `[processes]` у `fly.toml`; менять нужно оба.
 
 **gofmt на Windows:** включён `core.autocrlf=true`, поэтому в рабочей копии файлы с CRLF и `gofmt -l` помечает вообще все файлы. Проверять форматирование, игнорируя `\r`:
 `for f in $(git ls-files -m -o --exclude-standard '*.go'); do tr -d '\r' < $f | gofmt -d; done`
@@ -25,18 +26,21 @@ go test ./internal/game -run TestPrintMap -v           # ASCII-схема кар
 
 ## Архитектура
 
-Авторитетный сервер real-time арены (Go, `nhooyr.io/websocket`), тики 20 Гц, одна комната `lobby` до 8 игроков.
+Авторитетный сервер real-time арены (Go, `nhooyr.io/websocket`), тики 20 Гц, до 50 комнат по 2–8 игроков.
 
-Слои со строгим направлением зависимостей `room → game`, `room → net`, `room → leaderboard`; **`game`, `net` и `leaderboard` ничего не знают друг о друге**:
+Слои со строгим направлением зависимостей `manager → room`, `room → game`, `room → net`, `room → leaderboard`; **`game`, `net` и `leaderboard` ничего не знают друг о друге** (общая проверка CORS-`Origin` — в листовом `internal/cors`):
 
 - **`internal/game`** — чистая симуляция, без I/O, без горутин, не потокобезопасна. `World.Update(dt, inputs)` продвигает один тик; `World.Snapshot()` — чистое чтение, возвращающее копии. Все настройки живут в `Config` (`DefaultConfig()` — продакшен). Механики разнесены по файлам: `world.go` (движение, препятствия, пули, раунды, перегрев), `pickups.go`, `dash.go`, `events.go`, `maps.go`.
 - **`internal/net`** — протокол обмена (`protocol.go`: JSON-типы `Input`, `Welcome`, `Snapshot`, `Event` …) и `Conn`, обёртка над WebSocket, где в сокет пишет только `WritePump`, а все остальные кладут в очередь через неблокирующий `TrySend`.
 - **`internal/leaderboard`** — таблица лидеров за всё время: интерфейс `Store` (`AddScore`, `Top`), реализации `Memory` и `Redis` (go-redis/v9: `ZINCRBY lb:scores`, `HSET lb:names`, член ZSET — `playerKey`), `Open(url)` с откатом на `Memory` при пустом URL или недоступном Redis (в лог — только хост) и HTTP-обработчик `GET /leaderboard` с той же проверкой `Origin`, что у nhooyr. Тесты Redis идут на `miniredis` — живой Redis не нужен.
-- **`internal/room`** — единственное место, где слои встречаются. `Room` — это **одна горутина** (`Run`), владеющая миром, клиентами и буферами ввода; снаружи с ней общаются только через каналы `join`/`leave`/`inputs`, поэтому мьютексов нет. Мир мутируется только в `tick()`. `broadcast` конвертирует `game.Snapshot` → `net.Snapshot`, маршалит один раз и выбрасывает клиентов, у которых очередь отправки переполнена.
+- **`internal/room`** — единственное место, где слои встречаются. `Room` — это **одна горутина** (`Run`), владеющая миром, клиентами и буферами ввода; снаружи с ней общаются только через каналы `join`/`leave`/`inputs`, поэтому мьютексов нет. Мир мутируется только в `tick()`. `broadcast` конвертирует `game.Snapshot` → `net.Snapshot`, маршалит один раз и выбрасывает клиентов, у которых очередь отправки переполнена. Настройки комнаты — опции `New(..., WithMode, WithMaxPlayers, WithGameConfig, WithTickObserver)`. Наружу комната публикует только атомарные `Players()`, `Seats()`, `Phase()` (пишет их горутина `Run`, фазу — лишь при смене).
+- **`internal/manager`** — реестр комнат `map[id]*entry` под одним `sync.RWMutex` (единственный мьютекс над комнатами; у лимитера `POST /rooms` свой). `Create`/`Get`/`List`/`ByCode`/`FindOrCreate`/`Shutdown`, фоновый `reap` раз в `ReapInterval` удаляет комнаты, пустые `EmptyTTL` (часы инжектируются через `Config.Now`; тесты зовут `reap()` руками на `newManager` без фоновой горутины). HTTP — `Register(mux, HTTPConfig)`: `/rooms`, `/rooms/by-code/{code}`, `/ws`, `/metrics` (собственный `prometheus.Registry`, не глобальный). Режим → `game.Config` — в `gameConfig(mode)`; `zombie` пока запускает обычную арену.
+
+**Места в комнате** (`Room.seats`) = подключённые + зарезервированные. `Reserve()` берёт место CAS-ом до входа, `JoinReserved` его использует (при ошибке освобождает), уход/дроп игрока освобождает в `removeClient`. `FindOrCreate` возвращает комнату **с уже занятым местом** — вызывающий обязан `JoinReserved` или `Unreserve`; без этого параллельные автозаполнения переполняли бы комнату. `Retire()` CAS-ом 0 → отрицательное списывает пустую комнату: после него `Reserve` → `ErrClosed`, так `reap` не гоняется с входящим игроком. `/ws` резервирует место только после `ReadJoin`, чтобы молчащий клиент не держал его.
 
 Профиль игрока (имя, `playerKey`, индекс цвета — `room/profile.go`) живёт в комнате (`clients map[PlayerID]*client`), а не в `game`: симуляции он не нужен, `broadcast` подставляет имя и цвет в снапшот и `round.scores`. Фраги пишутся в `Store` асинхронно: `tick` → `recordKills` неблокирующе кладёт +1 стрелку в буферизованный канал, единственный писатель — горутина `writeScores`; при полной очереди запись теряется, тик не ждёт. При остановке `Run` дописывает очередь не дольше `flushTimeout`.
 
-На каждое соединение (`room/handler.go`): accept → `Conn.ReadJoin` (первое сообщение обязано быть `join`, таймаут `joinTimeout` 5 с; в тестах подменяется через `SetJoinTimeout` из `export_test.go`) → `Room.Join` (Welcome кладётся в очередь до возврата из Join) → горутина `WritePump` + блокирующий `ReadPump` → `Leave`. Подключения и отключения применяются на следующем тике.
+На каждое соединение (`manager/http.go` → `room.Play`): разбор `?room=`/`?mode=` → accept (нет комнаты — close `4004`, плохой режим — `4000`) → `Conn.ReadJoin` (первое сообщение обязано быть `join`, таймаут `joinTimeout` 5 с; в тестах `room` подменяется через `SetJoinTimeout` из `export_test.go`) → `Reserve`/`FindOrCreate` → `room.Play`: `JoinReserved` (Welcome кладётся в очередь до возврата) → горутина `WritePump` + блокирующий `ReadPump` → `Leave`. `room.Handler` — тот же путь для одной комнаты, им пользуются интеграционные тесты `room`. Подключения и отключения применяются на следующем тике.
 
 ### Карты
 
