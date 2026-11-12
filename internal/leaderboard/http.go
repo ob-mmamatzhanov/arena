@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"path"
 	"strconv"
-	"strings"
 	"time"
+
+	"arena/internal/cors"
 )
 
 const (
@@ -24,10 +23,7 @@ const (
 // (например, "localhost:*"), плюс собственный хост сервера.
 func Handler(st Store, originPatterns []string, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Vary", "Origin")
-		if o := r.Header.Get("Origin"); o != "" && originAllowed(o, r.Host, originPatterns) {
-			w.Header().Set("Access-Control-Allow-Origin", o)
-		}
+		cors.Allow(w, r, originPatterns)
 
 		n := defaultTop
 		if s := r.URL.Query().Get("n"); s != "" {
@@ -53,24 +49,4 @@ func Handler(st Store, originPatterns []string, log *slog.Logger) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(top)
 	})
-}
-
-// originAllowed повторяет проверку Origin в nhooyr.io/websocket: хост из
-// Origin совпадает с хостом запроса или подходит под один из шаблонов
-// (path.Match без учёта регистра).
-func originAllowed(origin, host string, patterns []string) bool {
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	if strings.EqualFold(u.Host, host) {
-		return true
-	}
-	h := strings.ToLower(u.Host)
-	for _, p := range patterns {
-		if ok, err := path.Match(strings.ToLower(p), h); err == nil && ok {
-			return true
-		}
-	}
-	return false
 }
