@@ -14,8 +14,7 @@ import (
 	"time"
 
 	"arena/internal/leaderboard"
-	anet "arena/internal/net"
-	"arena/internal/room"
+	"arena/internal/manager"
 )
 
 func main() {
@@ -23,6 +22,8 @@ func main() {
 	origins := flag.String("origins", "", "разрешённые Origin через запятую (например, localhost:5173)")
 	redisURL := flag.String("redis", os.Getenv("REDIS_URL"),
 		"URL Redis для таблицы лидеров (redis://[user:pass@]host:port/db); пусто — в памяти. По умолчанию $REDIS_URL")
+	ipHeader := flag.String("ip-header", "",
+		"заголовок доверенного прокси с IP клиента для лимита POST /rooms (например, Fly-Client-IP); пусто — RemoteAddr")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -36,9 +37,7 @@ func main() {
 		defer c.Close()
 	}
 
-	lobby := room.New("lobby", lb, log)
-	roomCtx, stopRoom := context.WithCancel(context.Background())
-	go lobby.Run(roomCtx)
+	rooms := manager.New(manager.Config{Store: lb, Log: log})
 
 	var originPatterns []string
 	if *origins != "" {
@@ -48,13 +47,13 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		select {
-		case <-lobby.Done():
-			http.Error(w, "room stopped", http.StatusServiceUnavailable)
+		case <-rooms.Done():
+			http.Error(w, "manager stopped", http.StatusServiceUnavailable)
 		default:
 			_, _ = w.Write([]byte("ok"))
 		}
 	})
-	mux.Handle("GET /ws", room.Handler(lobby, anet.AcceptOptions{OriginPatterns: originPatterns}, log))
+	rooms.Register(mux, manager.HTTPConfig{OriginPatterns: originPatterns, ClientIPHeader: *ipHeader, Log: log})
 	mux.Handle("GET /leaderboard", leaderboard.Handler(lb, originPatterns, log))
 
 	srv := &http.Server{
@@ -78,13 +77,13 @@ func main() {
 		}
 	}
 
-	// Порядок: сначала комната закрывает WebSocket-соединения (они hijacked
+	// Порядок: сначала комнаты закрывают WebSocket-соединения (они hijacked
 	// и не отслеживаются http.Server), затем останавливаем HTTP-сервер.
-	stopRoom()
-	<-lobby.Done()
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if err := rooms.Shutdown(shutdownCtx); err != nil {
+		log.Error("rooms shutdown", "err", err)
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("http shutdown", "err", err)
 	}
