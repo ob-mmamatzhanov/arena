@@ -62,13 +62,13 @@ var (
 // ValidMode сообщает, известен ли режим.
 func ValidMode(mode string) bool { return slices.Contains(Modes, mode) }
 
-// gameConfig — конфиг мира для режима и вместимости комнаты. Карта зависит от
-// вместимости: от game.LargeMapMinPlayers — арена с дополнительными укрытиями
-// (game.MapForPlayers). Отдельного zombie-режима в симуляции пока нет: такая
+// gameConfig — конфиг мира для режима и вместимости комнаты. Карта и прочность
+// ящиков зависят от вместимости: от game.LargeMapMinPlayers — арена с
+// дополнительными укрытиями и ящиками на game.LargeMapCrateHits попаданий
+// (game.ConfigForPlayers). Отдельного zombie-режима в симуляции пока нет: такая
 // комната запускает обычную арену и отличается только меткой.
 func gameConfig(mode string, maxPlayers int) game.Config {
-	cfg := game.DefaultConfig()
-	cfg.Map = game.MapForPlayers(maxPlayers)
+	cfg := game.ConfigForPlayers(maxPlayers)
 	switch mode {
 	case ModeZombie:
 		return cfg // TODO: правила zombie-режима

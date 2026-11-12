@@ -86,12 +86,29 @@ func DefaultMap() Map { return ArenaMap() }
 // в открытую.
 const LargeMapMinPlayers = 5
 
+// LargeMapCrateHits — прочность ящиков на ArenaLargeMap. В бою 5–8 игроков
+// ящики с обычной прочностью (5) разлетались за первые ~40 с раунда, и
+// добавленные укрытия переставали работать.
+const LargeMapCrateHits = 10
+
 // MapForPlayers — карта для комнаты вместимостью maxPlayers.
 func MapForPlayers(maxPlayers int) Map {
 	if maxPlayers >= LargeMapMinPlayers {
 		return ArenaLargeMap()
 	}
 	return ArenaMap()
+}
+
+// ConfigForPlayers — DefaultConfig для комнаты вместимостью maxPlayers: карта
+// по вместимости (MapForPlayers), на большой арене — прочные ящики
+// (LargeMapCrateHits).
+func ConfigForPlayers(maxPlayers int) Config {
+	cfg := DefaultConfig()
+	cfg.Map = MapForPlayers(maxPlayers)
+	if maxPlayers >= LargeMapMinPlayers {
+		cfg.CrateHits = LargeMapCrateHits
+	}
+	return cfg
 }
 
 // ArenaLargeMap — арена для 5–8 игроков: та же ArenaMap (спавны, края,
