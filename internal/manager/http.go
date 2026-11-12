@@ -46,6 +46,7 @@ type HTTPConfig struct {
 //	POST /rooms {mode, maxPlayers, private} → 201 {id, code?}
 //	GET  /rooms/by-code/{code} → {id} | 404
 //	GET  /ws?room=<id> | ?mode=<mode> — WebSocket игрока
+//	GET  /metrics              — метрики Prometheus
 func (m *Manager) Register(mux *http.ServeMux, cfg HTTPConfig) {
 	if cfg.Log == nil {
 		cfg.Log = m.log
@@ -56,6 +57,7 @@ func (m *Manager) Register(mux *http.ServeMux, cfg HTTPConfig) {
 	mux.HandleFunc("OPTIONS /rooms", h.preflight)
 	mux.HandleFunc("GET /rooms/by-code/{code}", h.byCode)
 	mux.HandleFunc("GET /ws", h.ws)
+	mux.Handle("GET /metrics", m.MetricsHandler())
 }
 
 type handlers struct {

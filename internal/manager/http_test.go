@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
@@ -250,4 +251,39 @@ func TestWSRouting(t *testing.T) {
 		t.Fatalf("полная комната: close %d, want TryAgainLater", code)
 	}
 	waitFor(t, "игроки в метрике", func() bool { return priv.Players() == 2 })
+}
+
+func TestMetrics(t *testing.T) {
+	s := startHTTP(t)
+	a := s.m.FindOrCreate(ModeArena)
+	joinRoom(t, a)
+	if _, err := s.m.Create(Opts{Mode: ModeArena, MaxPlayers: 2, Private: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "тик комнаты", func() bool {
+		_, body := s.do(t, http.MethodGet, "/metrics", "", nil)
+		return strings.Contains(body, `arena_tick_duration_seconds_count{room="`+a.Name()+`"}`)
+	})
+	_, body := s.do(t, http.MethodGet, "/metrics", "", nil)
+	for _, want := range []string{
+		`arena_rooms_active{mode="arena"} 2`,
+		`arena_rooms_active{mode="zombie"} 0`,
+		`arena_players_online 1`,
+		`arena_tick_duration_seconds_bucket{room="` + a.Name() + `",le="`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в /metrics нет %q", want)
+		}
+	}
+
+	// Серия гистограммы уходит вместе с комнатой.
+	s.m.mu.Lock()
+	e := s.m.rooms[a.Name()]
+	s.m.removeLocked(a.Name())
+	s.m.mu.Unlock()
+	e.cancel()
+	time.Sleep(3 * time.Second / 20) // тик-другой: наблюдение в удалённую серию не возвращает её
+	if _, body := s.do(t, http.MethodGet, "/metrics", "", nil); strings.Contains(body, `room="`+a.Name()+`"`) {
+		t.Fatal("серия удалённой комнаты осталась в /metrics")
+	}
 }

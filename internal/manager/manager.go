@@ -1,5 +1,6 @@
 // Package manager — реестр игровых комнат над пакетом room: создание,
-// поиск комнаты для автозаполнения, приватные коды, удаление пустых комнат.
+// поиск комнаты для автозаполнения, приватные коды, удаление пустых комнат,
+// HTTP-ручки /rooms, /ws, /metrics.
 //
 // Реестр (map id → комната) защищён одним sync.RWMutex — это единственный
 // мьютекс менеджера. Внутрь комнат менеджер не лезет: каждая комната — своя
@@ -107,9 +108,10 @@ type entry struct {
 
 // Manager — реестр комнат. Методы безопасны для вызова из любых горутин.
 type Manager struct {
-	log   *slog.Logger
-	store leaderboard.Store
-	now   func() time.Time
+	log     *slog.Logger
+	store   leaderboard.Store
+	now     func() time.Time
+	metrics *metrics
 
 	// Генераторы id и кода; подменяются в тестах.
 	newID   func() string
@@ -149,6 +151,7 @@ func newManager(cfg Config) *Manager {
 		codes:   make(map[string]string),
 		stop:    make(chan struct{}),
 	}
+	m.metrics = newMetrics(m)
 	return m
 }
 
@@ -195,8 +198,10 @@ func (m *Manager) createLocked(o Opts) (*entry, error) {
 		}
 	}
 
+	obs := m.metrics.tickObserver(id)
 	rm := room.New(id, m.store, m.log, room.WithMode(o.Mode), room.WithMaxPlayers(o.MaxPlayers),
-		room.WithGameConfig(gameConfig(o.Mode)))
+		room.WithGameConfig(gameConfig(o.Mode)),
+		room.WithTickObserver(func(d time.Duration) { obs.Observe(d.Seconds()) }))
 	ctx, cancel := context.WithCancel(context.Background())
 	go rm.Run(ctx)
 
@@ -375,6 +380,7 @@ func (m *Manager) removeLocked(id string) {
 		delete(m.codes, e.code)
 	}
 	m.order = slices.DeleteFunc(m.order, func(s string) bool { return s == id })
+	m.metrics.forget(id)
 }
 
 // Shutdown останавливает все комнаты (они закрывают соединения игроков) и
