@@ -178,3 +178,24 @@ func TestMapCratesDestructibleByDefault(t *testing.T) {
 		}
 	})
 }
+
+// Большая арена — прочные ящики: комнаты на 5–8 игроков получают
+// LargeMapCrateHits, остальные — DefaultConfig().CrateHits.
+func TestConfigForPlayersCrateHits(t *testing.T) {
+	for n, want := range map[int]int{2: DefaultConfig().CrateHits, 4: DefaultConfig().CrateHits, 5: LargeMapCrateHits, 8: LargeMapCrateHits} {
+		cfg := ConfigForPlayers(n)
+		if cfg.CrateHits != want || cfg.Map.Name != MapForPlayers(n).Name {
+			t.Errorf("ConfigForPlayers(%d): CrateHits %d, карта %s; want %d, %s", n, cfg.CrateHits, cfg.Map.Name, want, MapForPlayers(n).Name)
+		}
+		// Мир с этим конфигом выдаёт ящикам ровно столько прочности.
+		w := NewWorld(cfg)
+		for i, o := range cfg.Obstacles {
+			if o.KindOrDefault() == ObstacleCrate && w.crateHP[i] != want {
+				t.Fatalf("ConfigForPlayers(%d): ящик %d с прочностью %d, want %d", n, i, w.crateHP[i], want)
+			}
+		}
+	}
+	if LargeMapCrateHits != 10 {
+		t.Errorf("LargeMapCrateHits = %d, want 10", LargeMapCrateHits)
+	}
+}
