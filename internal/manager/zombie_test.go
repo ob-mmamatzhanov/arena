@@ -38,7 +38,7 @@ func TestGameConfigEnablesZombiesOnlyForZombieMode(t *testing.T) {
 }
 
 // Комната режима zombie, созданная менеджером, с одним игроком: через 6 с
-// симуляции (120 тиков после входа) в снапшоте 4 зомби первой волны.
+// симуляции (120 тиков после входа) в снапшоте 2 зомби первой волны.
 // Тики ускорены (WithTickInterval), шаг симуляции — обычные 50 мс.
 func TestZombieRoomSpawnsFirstWave(t *testing.T) {
 	m, _ := testManager(t)
@@ -78,8 +78,8 @@ func TestZombieRoomSpawnsFirstWave(t *testing.T) {
 		if s.Tick < first+after {
 			continue
 		}
-		if len(s.Zombies) != 4 || s.Round.Wave == nil || *s.Round.Wave != 1 ||
-			s.Round.ZombiesLeft == nil || *s.Round.ZombiesLeft != 4 {
+		if len(s.Zombies) != 2 || s.Round.Wave == nil || *s.Round.Wave != 1 ||
+			s.Round.ZombiesLeft == nil || *s.Round.ZombiesLeft != 2 {
 			t.Fatalf("тик %d (+%d): зомби %d, round %+v", s.Tick, s.Tick-first, len(s.Zombies), s.Round)
 		}
 		for _, z := range s.Zombies {

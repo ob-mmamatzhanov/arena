@@ -62,10 +62,12 @@ type ZombieConfig struct {
 	ContactCooldown float64 // секунд между укусами одного зомби
 }
 
-// DefaultZombieConfig — параметры режима зомби для продакшена.
+// DefaultZombieConfig — параметры режима зомби для продакшена. Первая волна —
+// разминочная, из 2 зомби: с 4 зомби сразу игрок нередко погибал, ещё не
+// разобравшись в режиме (волна n теперь как прежняя n−1, скорость прежняя).
 func DefaultZombieConfig() ZombieConfig {
 	return ZombieConfig{
-		WaveBase: 4, WaveStep: 2, Speed: 90, SpeedStep: 5, HP: 30, Radius: 12,
+		WaveBase: 2, WaveStep: 2, Speed: 90, SpeedStep: 5, HP: 30, Radius: 12,
 		FirstWaveDelay: 5, WavePause: 10, SpawnMinPlayerDist: 200,
 		FlowCell: 20, FlowEvery: 5,
 		ContactDamage: 10, ContactCooldown: 0.5,
