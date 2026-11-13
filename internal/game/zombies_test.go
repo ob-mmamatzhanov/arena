@@ -40,7 +40,7 @@ func TestFirstWaveFiveSecondsAfterFirstPlayer(t *testing.T) {
 	}
 	tickN(w, 1)
 	s = w.Snapshot()
-	if len(s.Zombies) != 4 || s.Round.Wave != 1 || s.Round.ZombiesLeft != 4 || s.Round.TimeLeft != 0 {
+	if len(s.Zombies) != 2 || s.Round.Wave != 1 || s.Round.ZombiesLeft != 2 || s.Round.TimeLeft != 0 {
 		t.Fatalf("через 5 с: зомби %d, round %+v", len(s.Zombies), s.Round)
 	}
 	for _, z := range s.Zombies {
@@ -56,7 +56,7 @@ func TestWavesGrowAndPauseTenSeconds(t *testing.T) {
 	tickN(w, ticksFor(5)+1)
 	for wave := 1; wave <= 3; wave++ {
 		s := w.Snapshot()
-		wantN, wantSpeed := 4+2*(wave-1), 90+5*float64(wave-1)
+		wantN, wantSpeed := 2+2*(wave-1), 90+5*float64(wave-1)
 		if s.Round.Wave != wave || len(s.Zombies) != wantN || s.Zombies[0].Speed != wantSpeed {
 			t.Fatalf("волна %d: round %+v, зомби %d (want %d), скорость %v (want %v)",
 				wave, s.Round, len(s.Zombies), wantN, s.Zombies[0].Speed, wantSpeed)
@@ -258,7 +258,7 @@ func TestZombieGameResetsWhenEveryoneLeaves(t *testing.T) {
 	w := NewWorld(zombieConfig())
 	w.AddPlayer(1)
 	tickN(w, ticksFor(5)+1)
-	if len(w.Snapshot().Zombies) != 4 {
+	if len(w.Snapshot().Zombies) != 2 {
 		t.Fatal("волна 1 не началась")
 	}
 	w.RemovePlayer(1)
@@ -268,7 +268,7 @@ func TestZombieGameResetsWhenEveryoneLeaves(t *testing.T) {
 	}
 	w.AddPlayer(2)
 	tickN(w, ticksFor(5)+1)
-	if s := w.Snapshot(); len(s.Zombies) != 4 || s.Round.Wave != 1 {
+	if s := w.Snapshot(); len(s.Zombies) != 2 || s.Round.Wave != 1 {
 		t.Fatalf("после нового входа: зомби %d, волна %d", len(s.Zombies), s.Round.Wave)
 	}
 }
