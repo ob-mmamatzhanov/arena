@@ -75,6 +75,8 @@ type Welcome struct {
 	// CrateHits — сколько попаданий выдерживает целый ящик (kind "crate");
 	// 0 — ящики неразрушимы. Нужен клиенту для отрисовки повреждений.
 	CrateHits int `json:"crateHits"`
+	// ZombieRadius — радиус зомби; есть только в комнате режима zombie.
+	ZombieRadius float64 `json:"zombieRadius,omitempty"`
 }
 
 // Obstacle — препятствие карты: левый верхний угол (x, y), ширина w, высота h,
@@ -130,6 +132,8 @@ const (
 
 	EventCrateHit    = "crateHit"
 	EventCrateBroken = "crateBroken"
+
+	EventZombieKill = "zombieKill"
 )
 
 // Event — одномоментное событие тика этого снапшота. У каждого типа свой
@@ -143,6 +147,10 @@ const (
 //	respawn:     {type, playerId, x, y}
 //	crateHit:    {type, obstacle, hp, x, y} — пуля попала в целый ящик и погасла; hp — остаток
 //	crateBroken: {type, obstacle, x, y}     — ящик сломан (x, y — его центр); идёт после своего crateHit
+//	zombieKill:  {type, zombieId, shooterId, x, y} — пуля убила зомби (x, y — где он стоял)
+//
+// В режиме zombie укус зомби — hit/kill с shooterId 0, а пуля, ранившая
+// зомби не насмерть, — bulletHit.
 //
 // obstacle — индекс в welcome.obstacles. Теги нужны для разбора (клиенты на
 // Go, тесты); omitempty на числах не годится — координата 0, ID и индекс 0
@@ -157,6 +165,7 @@ type Event struct {
 	PickupType string  `json:"pickupType"`
 	Obstacle   int     `json:"obstacle"`
 	HP         int     `json:"hp"`
+	ZombieID   uint32  `json:"zombieId"`
 }
 
 // MarshalJSON сериализует только поля, относящиеся к типу события.
@@ -209,6 +218,13 @@ func (e Event) MarshalJSON() ([]byte, error) {
 			Obstacle int    `json:"obstacle"`
 			xy
 		}{e.Type, e.Obstacle, xy{e.X, e.Y}})
+	case EventZombieKill:
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			ZombieID  uint32 `json:"zombieId"`
+			ShooterID uint32 `json:"shooterId"`
+			xy
+		}{e.Type, e.ZombieID, e.ShooterID, xy{e.X, e.Y}})
 	}
 	return nil, fmt.Errorf("net: unknown event type %q", e.Type)
 }
@@ -217,6 +233,7 @@ func (e Event) MarshalJSON() ([]byte, error) {
 const (
 	PhasePlay         = "play"
 	PhaseIntermission = "intermission"
+	PhaseGameOver     = "gameover" // режим zombie: все игроки мертвы
 )
 
 // Round — состояние раунда.
@@ -224,13 +241,22 @@ const (
 //	play:         {phase, timeLeft}
 //	intermission: {phase, timeLeft, winnerId, scores}
 //
-// winnerId = 0 — победителя нет (ничья или ни одного фрага). Указатель нужен,
-// чтобы в intermission поле присутствовало и с нулём, а в play отсутствовало.
+// В режиме zombie:
+//
+//	play:     {phase, timeLeft, wave, zombiesLeft} — timeLeft до следующей волны, 0 пока волна идёт
+//	gameover: {phase, timeLeft, wave, kills}       — timeLeft до новой игры с первой волны
+//
+// winnerId = 0 — победителя нет (ничья или ни одного фрага). Указатели нужны,
+// чтобы поля присутствовали и с нулём там, где они есть, и отсутствовали в
+// остальных фазах и режимах.
 type Round struct {
-	Phase    string  `json:"phase"`
-	TimeLeft float64 `json:"timeLeft"`
-	WinnerID *uint32 `json:"winnerId,omitempty"`
-	Scores   []Score `json:"scores,omitempty"`
+	Phase       string  `json:"phase"`
+	TimeLeft    float64 `json:"timeLeft"`
+	WinnerID    *uint32 `json:"winnerId,omitempty"`
+	Scores      []Score `json:"scores,omitempty"`
+	Wave        *int    `json:"wave,omitempty"`
+	ZombiesLeft *int    `json:"zombiesLeft,omitempty"`
+	Kills       *int    `json:"kills,omitempty"`
 }
 
 // Score — итоговый счёт игрока в раунде.
@@ -251,7 +277,18 @@ type Snapshot struct {
 	Events  []Event       `json:"events,omitempty"`
 	Pickups []Pickup      `json:"pickups"`
 	Crates  []Crate       `json:"crates,omitempty"`
+	Zombies []Zombie      `json:"zombies,omitempty"`
 	Round   Round         `json:"round"`
+}
+
+// Zombie — зомби на карте (режим zombie). snapshot.zombies опускается, когда
+// зомби нет (до первой волны, между волнами, в другом режиме).
+type Zombie struct {
+	ID    uint32  `json:"id"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	HP    int     `json:"hp"`
+	Speed float64 `json:"speed"` // единиц в секунду
 }
 
 // Crate — повреждённый или сломанный ящик: i — индекс в welcome.obstacles,
