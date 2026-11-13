@@ -473,6 +473,16 @@ func TestSnapshotRoundJSONShape(t *testing.T) {
 				Scores: []game.ScoreEntry{{ID: 1, Score: 0}}},
 			`{"phase":"intermission","timeLeft":8,"winnerId":0,"scores":[{"id":1,"name":"Ann","score":0}]}`,
 		},
+		{
+			"zombie play carries wave and zombiesLeft, zeros included",
+			game.RoundState{Phase: game.PhasePlay, TimeLeft: 4.5, Zombies: true, Kills: 9},
+			`{"phase":"play","timeLeft":4.5,"wave":0,"zombiesLeft":0}`,
+		},
+		{
+			"zombie gameover carries wave and kills",
+			game.RoundState{Phase: game.PhaseGameOver, TimeLeft: 8, Zombies: true, Wave: 3, ZombiesLeft: 2, Kills: 0},
+			`{"phase":"gameover","timeLeft":8,"wave":3,"kills":0}`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
