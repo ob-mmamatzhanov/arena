@@ -2,8 +2,10 @@ package room
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,5 +162,38 @@ func TestTickObserver(t *testing.T) {
 		}
 	case <-time.After(waitTimeout):
 		t.Fatal("наблюдатель тика не вызван")
+	}
+}
+
+func TestSnapshotZombiesJSON(t *testing.T) {
+	rm := New("test", nil, slog.New(slog.DiscardHandler))
+	c := newFakeClient(2)
+	rm.clients[1] = &client{conn: c}
+
+	rm.broadcast(game.Snapshot{
+		Zombies: []game.ZombieState{{ID: 5, Pos: game.Vec2{X: 12, Y: 300}, HP: 5, Speed: 95}},
+		Events:  []game.Event{{Type: game.EventZombieKill, Zombie: 4, Shooter: 1, Pos: game.Vec2{X: 7, Y: 8}}},
+		Round:   game.RoundState{Phase: game.PhasePlay, Zombies: true, Wave: 2, ZombiesLeft: 1},
+	})
+	var got struct {
+		Zombies json.RawMessage `json:"zombies"`
+		Events  json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(<-c.msgs, &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"id":5,"x":12,"y":300,"hp":5,"speed":95}]`; string(got.Zombies) != want {
+		t.Fatalf("zombies = %s, want %s", got.Zombies, want)
+	}
+	if want := `[{"type":"zombieKill","zombieId":4,"shooterId":1,"x":7,"y":8}]`; string(got.Events) != want {
+		t.Fatalf("events = %s, want %s", got.Events, want)
+	}
+
+	rm.broadcast(game.Snapshot{}) // арена: полей зомби нет
+	b := <-c.msgs
+	for _, k := range []string{`"zombies"`, `"wave"`, `"zombiesLeft"`, `"kills"`} {
+		if strings.Contains(string(b), k) {
+			t.Fatalf("%s в снапшоте арены: %s", k, b)
+		}
 	}
 }

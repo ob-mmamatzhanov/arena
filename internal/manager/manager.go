@@ -65,13 +65,13 @@ func ValidMode(mode string) bool { return slices.Contains(Modes, mode) }
 // gameConfig — конфиг мира для режима и вместимости комнаты. Карта и прочность
 // ящиков зависят от вместимости: от game.LargeMapMinPlayers — арена с
 // дополнительными укрытиями и ящиками на game.LargeMapCrateHits попаданий
-// (game.ConfigForPlayers). Отдельного zombie-режима в симуляции пока нет: такая
-// комната запускает обычную арену и отличается только меткой.
+// (game.ConfigForPlayers). Режим zombie включает в мире волны зомби
+// (game.ZombieModeConfig) на той же карте.
 func gameConfig(mode string, maxPlayers int) game.Config {
 	cfg := game.ConfigForPlayers(maxPlayers)
 	switch mode {
 	case ModeZombie:
-		return cfg // TODO: правила zombie-режима
+		return game.ZombieModeConfig(cfg)
 	default:
 		return cfg
 	}
@@ -120,6 +120,8 @@ type Manager struct {
 	// Генераторы id и кода; подменяются в тестах.
 	newID   func() string
 	newCode func() string
+	// roomOpts — дополнительные опции каждой новой комнаты (тесты: быстрые тики).
+	roomOpts []room.Option
 
 	mu     sync.RWMutex
 	rooms  map[string]*entry
@@ -203,9 +205,10 @@ func (m *Manager) createLocked(o Opts) (*entry, error) {
 	}
 
 	obs := m.metrics.tickObserver(id)
-	rm := room.New(id, m.store, m.log, room.WithMode(o.Mode), room.WithMaxPlayers(o.MaxPlayers),
+	opts := append([]room.Option{room.WithMode(o.Mode), room.WithMaxPlayers(o.MaxPlayers),
 		room.WithGameConfig(gameConfig(o.Mode, o.MaxPlayers)),
-		room.WithTickObserver(func(d time.Duration) { obs.Observe(d.Seconds()) }))
+		room.WithTickObserver(func(d time.Duration) { obs.Observe(d.Seconds()) })}, m.roomOpts...)
+	rm := room.New(id, m.store, m.log, opts...)
 	ctx, cancel := context.WithCancel(context.Background())
 	go rm.Run(ctx)
 
@@ -318,8 +321,10 @@ func (m *Manager) FindOrCreate(mode string) *room.Room {
 	return e.room
 }
 
+// joinablePhase — фазы, в которые автозаполнение кладёт игрока. gameover
+// (режим zombie) — та же пауза перед новой игрой, что intermission у арены.
 func joinablePhase(p game.Phase) bool {
-	return p == game.PhasePlay || p == game.PhaseIntermission
+	return p == game.PhasePlay || p == game.PhaseIntermission || p == game.PhaseGameOver
 }
 
 func stopped(rm *room.Room) bool {

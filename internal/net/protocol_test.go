@@ -30,6 +30,11 @@ func TestEventJSONShapes(t *testing.T) {
 			`{"type":"crateHit","obstacle":5,"hp":3,"x":1,"y":2}`},
 		{Event{Type: EventCrateBroken, Obstacle: 0, HP: 9, X: 316, Y: 106},
 			`{"type":"crateBroken","obstacle":0,"x":316,"y":106}`},
+		// zombieId и shooterId 0 законны — поля есть всегда.
+		{Event{Type: EventZombieKill, ZombieID: 0, ShooterID: 0, X: 12, Y: 0, TargetID: 3, HP: 5},
+			`{"type":"zombieKill","zombieId":0,"shooterId":0,"x":12,"y":0}`},
+		{Event{Type: EventZombieKill, ZombieID: 7, ShooterID: 2, X: 1, Y: 2},
+			`{"type":"zombieKill","zombieId":7,"shooterId":2,"x":1,"y":2}`},
 	}
 	for _, tt := range tests {
 		got, err := json.Marshal(tt.ev)
@@ -96,5 +101,42 @@ func TestWelcomeCrateHits(t *testing.T) {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("CrateHits=%d: %s", n, b)
 		}
+	}
+}
+
+// Поля режима zombie: zombies опускается без зомби, wave/zombiesLeft/kills
+// есть с нулями только там, где заданы, zombieRadius — только в zombie-комнате.
+func TestZombieFields(t *testing.T) {
+	b, _ := json.Marshal(Snapshot{Type: TypeSnapshot, Zombies: []Zombie{}, Round: Round{Phase: PhasePlay}})
+	if s := string(b); strings.Contains(s, `"zombies"`) || strings.Contains(s, `"wave"`) ||
+		strings.Contains(s, `"zombiesLeft"`) || strings.Contains(s, `"kills"`) {
+		t.Fatalf("поля зомби в снапшоте без них: %s", b)
+	}
+
+	zero := 0
+	b, _ = json.Marshal(Snapshot{
+		Zombies: []Zombie{{ID: 0, X: 0, Y: 5, HP: 30, Speed: 90}},
+		Round:   Round{Phase: PhasePlay, TimeLeft: 0, Wave: &zero, ZombiesLeft: &zero},
+	})
+	for _, want := range []string{
+		`"zombies":[{"id":0,"x":0,"y":5,"hp":30,"speed":90}]`,
+		`"round":{"phase":"play","timeLeft":0,"wave":0,"zombiesLeft":0}`,
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("нет %s в %s", want, b)
+		}
+	}
+
+	wave, kills := 3, 0
+	b, _ = json.Marshal(Round{Phase: PhaseGameOver, TimeLeft: 8, Wave: &wave, Kills: &kills})
+	if string(b) != `{"phase":"gameover","timeLeft":8,"wave":3,"kills":0}` {
+		t.Fatalf("gameover: %s", b)
+	}
+
+	if b, _ := json.Marshal(Welcome{Type: TypeWelcome}); strings.Contains(string(b), "zombieRadius") {
+		t.Fatalf("zombieRadius в арене: %s", b)
+	}
+	if b, _ := json.Marshal(Welcome{ZombieRadius: 12}); !strings.Contains(string(b), `"zombieRadius":12`) {
+		t.Fatalf("zombieRadius: %s", b)
 	}
 }

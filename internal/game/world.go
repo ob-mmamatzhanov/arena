@@ -55,11 +55,14 @@ type Player struct {
 	respawnLeft float64  // > 0 — игрок мёртв, секунд до респауна
 	killer      PlayerID // кто убил: респаун не ближе RespawnMinKillerDist к нему
 	invulnLeft  float64  // секунд неуязвимости после появления
+	// waitWave — убит зомби: мёртв без таймера, воскресает в начале следующей
+	// волны (zombies.go).
+	waitWave bool
 }
 
 // dead — игрок ждёт респауна: не двигается, не стреляет, вводы игнорируются,
 // пули проходят сквозь него.
-func (p *Player) dead() bool { return p.respawnLeft > 0 }
+func (p *Player) dead() bool { return p.respawnLeft > 0 || p.waitWave }
 
 // invulnerable — урон не наносится, но игрок может стрелять.
 func (p *Player) invulnerable() bool { return p.invulnLeft > timeEps }
@@ -108,6 +111,9 @@ type Phase string
 const (
 	PhasePlay         Phase = "play"         // идёт бой
 	PhaseIntermission Phase = "intermission" // пауза между раундами: мир заморожен
+	// PhaseGameOver — режим зомби: все игроки мертвы. Мир заморожен на
+	// IntermissionTime, затем игра начинается заново с первой волны.
+	PhaseGameOver Phase = "gameover"
 )
 
 // ScoreEntry — счёт игрока в итогах раунда.
@@ -124,6 +130,13 @@ type RoundState struct {
 	// WinnerID = 0 — победителя нет (ничья или ни одного фрага).
 	WinnerID PlayerID
 	Scores   []ScoreEntry // по возрастанию ID
+
+	// Режим зомби (Zombies = true). TimeLeft в play — секунд до следующей
+	// волны (0, пока волна идёт), в gameover — до новой игры.
+	Zombies     bool
+	Wave        int // номер текущей (или последней) волны, 0 — ещё не было
+	ZombiesLeft int // живых зомби в волне
+	Kills       int // убито зомби за игру
 }
 
 // Snapshot — полное состояние мира на конкретный тик.
@@ -133,8 +146,9 @@ type Snapshot struct {
 	Players []PlayerState
 	Bullets []BulletState
 	Events  []Event
-	Pickups []Pickup     // по возрастанию ID
-	Crates  []CrateState // повреждённые и сломанные ящики по возрастанию индекса; nil — все целые
+	Pickups []Pickup      // по возрастанию ID
+	Crates  []CrateState  // повреждённые и сломанные ящики по возрастанию индекса; nil — все целые
+	Zombies []ZombieState // по возрастанию ID; nil — зомби нет
 	Round   RoundState
 }
 
@@ -222,6 +236,10 @@ type Config struct {
 	RespawnMinKillerDist float64
 	InvulnTime           float64 // секунды
 
+	// Zombie — режим зомби (zombies.go): волны зомби вместо боя между игроками.
+	// Zombie.WaveBase ≤ 0 выключает режим. Включается ZombieModeConfig.
+	Zombie ZombieConfig
+
 	// Seed инициализирует генератор мира (точки респавна). Одинаковый seed
 	// и одинаковые вводы дают одинаковую симуляцию.
 	Seed uint64
@@ -270,12 +288,14 @@ type World struct {
 	ammoTimer   float64 // секунд до следующего появления ammo
 
 	crateHP []int // прочность препятствий параллельно cfg.Obstacles (crates.go)
+
+	zg zombieGame // режим зомби (zombies.go); пусто, если он выключен
 }
 
 // NewWorld создаёт пустой мир; первый раунд начинается сразу. Случайность
 // берётся только из генератора, засеянного cfg.Seed, поэтому симуляция воспроизводима.
 func NewWorld(cfg Config) *World {
-	return &World{
+	w := &World{
 		cfg:         cfg,
 		players:     make(map[PlayerID]*Player),
 		rng:         rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x9e3779b97f4a7c15)),
@@ -285,6 +305,10 @@ func NewWorld(cfg Config) *World {
 		ammoTimer:   cfg.AmmoPickupInterval,
 		crateHP:     newCrateHP(cfg),
 	}
+	if w.zombiesOn() {
+		w.zg = newZombieGame(cfg)
+	}
+	return w
 }
 
 // Config возвращает параметры мира. Room берёт отсюда размеры для Welcome,
@@ -335,7 +359,7 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 		return
 	}
 	w.events = w.events[:0] // события предыдущего тика уже ушли в его снапшот
-	if w.phase == PhaseIntermission {
+	if w.phase == PhaseIntermission || w.phase == PhaseGameOver {
 		w.timeLeft = max(w.timeLeft-dt, 0)
 		if w.timeLeft <= timeEps {
 			w.startRound()
@@ -373,6 +397,9 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	w.updatePickups(dt, ids)
 	w.updateBullets(dt, ids)
 	w.fire(dt, ids)
+	if w.zombiesOn() {
+		w.updateZombies(dt, ids) // после пуль: убитые в этом тике уже не кусают
+	}
 	// Неуязвимость тикает после попаданий: выданная в тике T защищает от
 	// попаданий ровно InvulnTime — в тиках T … T+InvulnTime/dt−1.
 	// Fire без свежего ввода гаснет после выстрелов: ввод тика T с FireHoldTime
@@ -387,6 +414,9 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 		}
 	}
 	w.advanceRound(dt, ids)
+	if w.zombiesOn() {
+		w.checkGameOver(ids)
+	}
 	w.tick++
 }
 
@@ -395,8 +425,8 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 func (w *World) updateRespawns(dt float64, ids []PlayerID) {
 	for _, id := range ids { // порядок по ID — детерминированный rng
 		p := w.players[id]
-		if !p.dead() {
-			continue
+		if p.respawnLeft <= 0 {
+			continue // жив или ждёт волны (waitWave): таймера нет
 		}
 		p.respawnLeft -= dt
 		if p.respawnLeft <= timeEps {
@@ -503,7 +533,7 @@ func (w *World) startRound() {
 		p.HP = StartHP
 		p.Score = 0
 		p.Ammo = w.cfg.StartAmmo
-		p.respawnLeft, p.killer = 0, 0
+		p.respawnLeft, p.killer, p.waitWave = 0, 0, false
 		p.invulnLeft = max(w.cfg.InvulnTime, 0)
 		p.Pos = w.respawnPoint(id, 0)
 		p.Move = Vec2{}
@@ -513,6 +543,9 @@ func (w *World) startRound() {
 		p.speedLeft = 0
 		p.dashReq, p.dashLeft, p.dashCd = false, 0, 0
 	}
+	if w.zombiesOn() {
+		w.resetZombieGame() // после игроков: отсчёт первой волны, если они есть
+	}
 }
 
 // contactEps допускает погрешность float при сравнении с точкой касания.
@@ -521,9 +554,11 @@ const contactEps = 1e-9
 // move сдвигает игрока на d с учётом краёв мира и препятствий. Оси разрешаются
 // раздельно — сначала X, затем Y (уже с новым X): упёршись в стену по одной оси,
 // игрок продолжает скользить вдоль неё по другой.
-func (w *World) move(pos, d Vec2) Vec2 {
-	r := w.cfg.PlayerRadius
-	lo, hi := w.bounds()
+func (w *World) move(pos, d Vec2) Vec2 { return w.moveCircle(pos, d, w.cfg.PlayerRadius) }
+
+// moveCircle — то же для круга радиуса r (зомби).
+func (w *World) moveCircle(pos, d Vec2, r float64) Vec2 {
+	lo, hi := w.boundsFor(r)
 	if d.X != 0 {
 		x := clamp(pos.X+d.X, lo.X, hi.X)
 		for i, o := range w.cfg.Obstacles {
@@ -686,7 +721,19 @@ func (w *World) updateBullets(dt float64, ids []PlayerID) {
 		to := Vec2{X: from.X + b.Vel.X*dt, Y: from.Y + b.Vel.Y*dt}
 		b.ttl -= dt
 
-		target, at, tHit, hit := w.firstHit(b.Owner, from, to, ids)
+		var (
+			target *Player
+			at     Vec2
+			tHit   float64
+			hit    bool
+			zi     = -1 // индекс зомби, если пуля попала в него раньше, чем в игрока
+		)
+		if w.zombiesOn() {
+			// В режиме зомби игроки не ранят друг друга: пули летят сквозь них.
+			zi, at, tHit, hit = w.firstZombie(from, to)
+		} else {
+			target, at, tHit, hit = w.firstHit(b.Owner, from, to, ids)
+		}
 		if tWall, wi, wall := w.firstObstacle(from, to); wall && (!hit || tWall < tHit) {
 			// Пуля разбилась о препятствие; Pos — центр пули в момент касания.
 			// О целый ящик — минус прочность (crateHit/crateBroken), иначе bulletHit.
@@ -699,7 +746,11 @@ func (w *World) updateBullets(dt float64, ids []PlayerID) {
 			continue
 		}
 		if hit {
-			w.applyHit(b.Owner, target, at)
+			if zi >= 0 {
+				w.hitZombie(zi, b.Owner, at)
+			} else {
+				w.applyHit(b.Owner, target, at)
+			}
 			continue
 		}
 		if to.X < 0 || to.X > w.cfg.Width || to.Y < 0 || to.Y > w.cfg.Height {
@@ -822,8 +873,11 @@ func (w *World) Snapshot() Snapshot {
 	ps := make([]PlayerState, 0, len(w.players))
 	for _, p := range w.players {
 		respawnIn := 0.0
-		if p.dead() {
+		switch {
+		case p.respawnLeft > 0:
 			respawnIn = p.respawnLeft
+		case p.waitWave && !w.zg.inWave:
+			respawnIn = w.zg.nextWave // воскреснет с началом следующей волны
 		}
 		ps = append(ps, PlayerState{
 			ID:      p.ID,
@@ -863,7 +917,20 @@ func (w *World) Snapshot() Snapshot {
 			round.Scores[i] = ScoreEntry{ID: p.ID, Score: p.Score}
 		}
 	}
+	var zombies []ZombieState
+	if w.zombiesOn() {
+		zombies = w.zombieStates()
+		round.Zombies = true
+		round.Wave, round.ZombiesLeft, round.Kills = w.zg.wave, len(zombies), w.zg.kills
+		if w.phase == PhasePlay {
+			round.TimeLeft = 0
+			if !w.zg.inWave && w.zg.started {
+				round.TimeLeft = w.zg.nextWave
+			}
+		}
+	}
 	return Snapshot{
+		Zombies: zombies,
 		Tick:    w.tick,
 		Players: ps,
 		Bullets: bs,
@@ -989,9 +1056,12 @@ func (w *World) mapRespawnPoint(id PlayerID, avoid Vec2, farEnough func(Vec2) bo
 // bounds — допустимый диапазон центра игрока: [0, Width]×[0, Height] с отступом
 // на радиус, чтобы тело не вылезало за край. Если радиус больше половины мира,
 // отступ урезается — иначе нижняя граница оказалась бы за верхней.
-func (w *World) bounds() (lo, hi Vec2) {
-	rx := math.Min(w.cfg.PlayerRadius, w.cfg.Width/2)
-	ry := math.Min(w.cfg.PlayerRadius, w.cfg.Height/2)
+func (w *World) bounds() (lo, hi Vec2) { return w.boundsFor(w.cfg.PlayerRadius) }
+
+// boundsFor — то же для круга радиуса r.
+func (w *World) boundsFor(r float64) (lo, hi Vec2) {
+	rx := math.Min(r, w.cfg.Width/2)
+	ry := math.Min(r, w.cfg.Height/2)
 	return Vec2{X: rx, Y: ry}, Vec2{X: w.cfg.Width - rx, Y: w.cfg.Height - ry}
 }
 

@@ -90,6 +90,7 @@ type Room struct {
 	maxPlayers int
 	log        *slog.Logger
 	onTick     func(time.Duration) // nil — длительность тика не измеряется
+	tickEvery  time.Duration       // реальный интервал тиков (WithTickInterval)
 
 	// Ниже — состояние, которое комната публикует наружу без блокировок:
 	// его читают менеджер комнат и HTTP-обработчики из других горутин.
@@ -129,6 +130,7 @@ type options struct {
 	maxPlayers int
 	cfg        *game.Config
 	onTick     func(time.Duration)
+	tickEvery  time.Duration
 }
 
 // WithMode задаёт режим комнаты (по умолчанию DefaultMode). Комната только
@@ -146,6 +148,11 @@ func WithGameConfig(cfg game.Config) Option { return func(o *options) { o.cfg = 
 // WithTickObserver передаёт длительность каждого тика в f. f вызывается из
 // горутины комнаты и не должен блокироваться.
 func WithTickObserver(f func(time.Duration)) Option { return func(o *options) { o.onTick = f } }
+
+// WithTickInterval задаёт реальный интервал между тиками вместо 1/TickRate с.
+// Шаг симуляции остаётся 1/TickRate: так тесты прогоняют секунды игры за
+// миллисекунды. ≤ 0 — по умолчанию.
+func WithTickInterval(d time.Duration) Option { return func(o *options) { o.tickEvery = d } }
 
 // New создаёт комнату. Её нужно запустить через Run. Фраги игроков
 // записываются в lb; nil — без таблицы лидеров.
@@ -165,6 +172,7 @@ func New(name string, lb leaderboard.Store, log *slog.Logger, opts ...Option) *R
 		maxPlayers:    min(max(o.maxPlayers, 1), MaxPlayers),
 		log:           log.With("room", name),
 		onTick:        o.onTick,
+		tickEvery:     o.tickEvery,
 		join:          make(chan joinReq),
 		leave:         make(chan game.PlayerID, MaxPlayers),
 		inputs:        make(chan anet.PlayerInput, inputsBuffer),
@@ -285,7 +293,11 @@ func (r *Room) Run(ctx context.Context) {
 	defer r.flushScores(writerDone) // после closeAll: Done закрывается, когда очередь дописана
 	defer r.closeAll()
 
-	ticker := time.NewTicker(time.Second / TickRate)
+	every := time.Second / TickRate
+	if r.tickEvery > 0 {
+		every = r.tickEvery
+	}
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
 	r.log.Info("room started", "mode", r.mode, "tickRate", TickRate, "maxPlayers", r.maxPlayers)
@@ -343,6 +355,7 @@ func (r *Room) handleJoin(req joinReq) {
 		PlayerRadius: cfg.PlayerRadius,
 		Obstacles:    obstacles,
 		CrateHits:    max(cfg.CrateHits, 0),
+		ZombieRadius: zombieRadius(cfg),
 	})
 	if err == nil && !cl.conn.TrySend(welcome) {
 		err = anet.ErrClosed
@@ -511,7 +524,14 @@ func (r *Room) broadcast(s game.Snapshot) {
 				PickupType: string(e.Pickup),
 				Obstacle:   e.Obstacle,
 				HP:         e.HP,
+				ZombieID:   uint32(e.Zombie),
 			}
+		}
+	}
+	if len(s.Zombies) > 0 { // nil → поле zombies опускается (omitempty)
+		msg.Zombies = make([]anet.Zombie, len(s.Zombies))
+		for i, z := range s.Zombies {
+			msg.Zombies[i] = anet.Zombie{ID: uint32(z.ID), X: z.Pos.X, Y: z.Pos.Y, HP: z.HP, Speed: z.Speed}
 		}
 	}
 	if len(s.Crates) > 0 { // nil → поле crates опускается (omitempty)
@@ -564,6 +584,17 @@ func (r *Room) broadcast(s game.Snapshot) {
 			msg.Round.Scores[i] = anet.Score{ID: uint32(sc.ID), Name: r.profileOf(sc.ID).name, Score: sc.Score}
 		}
 	}
+	if s.Round.Zombies {
+		wave := s.Round.Wave
+		msg.Round.Wave = &wave
+		if s.Round.Phase == game.PhaseGameOver {
+			kills := s.Round.Kills
+			msg.Round.Kills = &kills
+		} else {
+			left := s.Round.ZombiesLeft
+			msg.Round.ZombiesLeft = &left
+		}
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		r.log.Error("marshal snapshot", "err", err)
@@ -595,4 +626,13 @@ func (r *Room) closeAll() {
 		delete(r.clients, id)
 	}
 	r.players.Store(0)
+}
+
+// zombieRadius — радиус зомби для Welcome; 0 (поле опускается), если режим
+// зомби в мире выключен.
+func zombieRadius(cfg game.Config) float64 {
+	if cfg.Zombie.WaveBase <= 0 {
+		return 0
+	}
+	return cfg.Zombie.Radius
 }
