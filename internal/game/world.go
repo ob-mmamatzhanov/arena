@@ -36,7 +36,8 @@ type Player struct {
 	Pos      Vec2
 	Move     Vec2    // текущее (последнее принятое) направление движения
 	Angle    float64 // направление взгляда из последнего принятого ввода
-	Fire     bool    // огонь зажат (из последнего принятого ввода)
+	Fire     bool    // огонь зажат (из последнего принятого ввода, пока не истёк fireLeft)
+	fireLeft float64 // секунд, пока Fire без нового ввода ещё действует (см. Config.FireHoldTime)
 	cooldown float64 // секунд до следующего возможного выстрела
 	Heat     float64 // перегрев ствола [0, 1]: определяет разброс выстрелов
 	HP       int
@@ -152,6 +153,13 @@ type Config struct {
 	BulletLifetime float64 // секунды
 	FireCooldown   float64 // минимальный интервал между выстрелами, секунды
 	BulletDamage   int
+	// FireHoldTime — сколько секунд Fire из ввода действует, если новых вводов
+	// нет: дальше огонь считается отпущенным. Клиент шлёт ввод каждый тик, так
+	// что удержание огня продлевается непрерывно, а один пропущенный тик (сетевой
+	// джиттер) его не прерывает. Без лимита клик, после которого ввод замолк
+	// (лаг, фоновая вкладка), стрелял бы снова по каждому истечению FireCooldown.
+	// Должно быть меньше FireCooldown. ≤ 0 — Fire держится до следующего ввода.
+	FireHoldTime float64
 
 	// Отдача: каждый выстрел добавляет HeatPerShot (heat ≤ 1), каждую секунду
 	// без выстрела снимается HeatDecay. Отклонение пули от Angle — равномерно
@@ -224,7 +232,7 @@ func DefaultConfig() Config {
 	return Config{
 		Map:         DefaultMap(),
 		PlayerSpeed: 200, PlayerRadius: 12, HitRadius: 12,
-		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25,
+		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25, FireHoldTime: 0.1,
 		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
@@ -350,6 +358,7 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 			p.Angle = a
 		}
 		p.Fire = in.Fire
+		p.fireLeft = w.cfg.FireHoldTime
 		p.dashReq = in.Dash
 		p.LastSeq = in.Seq
 	}
@@ -366,9 +375,16 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	w.fire(dt, ids)
 	// Неуязвимость тикает после попаданий: выданная в тике T защищает от
 	// попаданий ровно InvulnTime — в тиках T … T+InvulnTime/dt−1.
+	// Fire без свежего ввода гаснет после выстрелов: ввод тика T с FireHoldTime
+	// 0.1 действует в тиках T и T+1 — меньше FireCooldown, повторного выстрела нет.
 	for _, id := range ids {
 		p := w.players[id]
 		p.invulnLeft = max(p.invulnLeft-dt, 0)
+		if w.cfg.FireHoldTime > 0 && p.Fire {
+			if p.fireLeft -= dt; p.fireLeft <= timeEps {
+				p.Fire = false
+			}
+		}
 	}
 	w.advanceRound(dt, ids)
 	w.tick++
