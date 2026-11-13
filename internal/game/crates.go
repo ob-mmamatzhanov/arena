@@ -39,7 +39,10 @@ func fillCrateHP(hp []int, cfg Config) {
 }
 
 // resetCrates — новый раунд: все ящики снова целые.
-func (w *World) resetCrates() { fillCrateHP(w.crateHP, w.cfg) }
+func (w *World) resetCrates() {
+	fillCrateHP(w.crateHP, w.cfg)
+	w.zg.flow.dirty = true // проходимость клеток для зомби изменилась
+}
 
 // broken — сломан ли i-й элемент cfg.Obstacles (тогда его нет для коллизий).
 func (w *World) broken(i int) bool { return i < len(w.crateHP) && w.crateHP[i] == 0 }
@@ -55,6 +58,7 @@ func (w *World) damageCrate(i int, at Vec2) {
 	if w.crateHP[i] == 0 {
 		o := w.cfg.Obstacles[i]
 		w.emit(Event{Type: EventCrateBroken, Pos: Vec2{X: o.X + o.W/2, Y: o.Y + o.H/2}, Obstacle: i})
+		w.zg.flow.dirty = true // проходимость клеток для зомби изменилась
 	}
 }
 
