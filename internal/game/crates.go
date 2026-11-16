@@ -58,7 +58,7 @@ func (w *World) damageCrate(i int, at Vec2) {
 	if w.crateHP[i] == 0 {
 		o := w.cfg.Obstacles[i]
 		w.emit(Event{Type: EventCrateBroken, Pos: Vec2{X: o.X + o.W/2, Y: o.Y + o.H/2}, Obstacle: i})
-		w.zg.flow.dirty = true // проходимость клеток для зомби изменилась
+		w.zg.flow.invalidate(o, w.cfg.Zombie.Radius) // проходимость клеток вокруг ящика изменилась
 	}
 }
 

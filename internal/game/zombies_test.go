@@ -419,3 +419,37 @@ func TestZombiesReachPlayerOnProductionMaps(t *testing.T) {
 		}
 	}
 }
+
+// Поломка ящика пересчитывает проходимость только вокруг него — результат
+// совпадает с полным пересчётом поля. Ломаются все ящики большой карты.
+func TestFlowLocalUpdateMatchesFull(t *testing.T) {
+	cfg := ZombieModeConfig(ConfigForPlayers(8))
+	w := NewWorld(cfg)
+	w.AddPlayer(1)
+	ids := w.sortedIDs()
+	w.rebuildFlow(ids)
+	before := slices.Clone(w.zg.flow.blocked)
+
+	for i, o := range cfg.Obstacles {
+		if w.destructible(i) {
+			w.crateHP[i] = 1
+			w.damageCrate(i, Vec2{X: o.X, Y: o.Y})
+		}
+	}
+	f := &w.zg.flow
+	if f.dirty || f.stale.empty() {
+		t.Fatalf("после поломки ящиков dirty=%v, stale=%+v: ждали только локальный пересчёт", f.dirty, f.stale)
+	}
+	w.rebuildFlow(ids)
+	if slices.Equal(before, f.blocked) {
+		t.Fatal("поломка ящиков не изменила проходимость клеток")
+	}
+	blocked, anchor, nbr, dist := slices.Clone(f.blocked), slices.Clone(f.anchor), slices.Clone(f.nbr), slices.Clone(f.dist)
+
+	f.dirty = true
+	w.rebuildFlow(ids)
+	if !slices.Equal(blocked, f.blocked) || !slices.Equal(anchor, f.anchor) ||
+		!slices.Equal(nbr, f.nbr) || !slices.Equal(dist, f.dist) {
+		t.Fatal("локальный пересчёт после поломки ящиков разошёлся с полным")
+	}
+}

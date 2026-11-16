@@ -7,7 +7,7 @@ import (
 
 // allMaps — все карты игры. Новая карта добавляется сюда и проходит те же проверки.
 func allMaps() []Map {
-	return []Map{ArenaMap(), ArenaLargeMap()}
+	return []Map{ArenaMap(), ArenaWideMap()}
 }
 
 // Параметры принципов карты (см. ArenaMap).
@@ -464,6 +464,63 @@ func TestArenaPickupZonesPlacement(t *testing.T) {
 	for _, typ := range []PickupType{PickupHealth, PickupAmmo, PickupSpeed} {
 		if len(m.PickupZones[typ]) == 0 {
 			t.Errorf("у типа %s нет зон", typ)
+		}
+	}
+}
+
+// Ядро большой карты — прямоугольник, куда вписана расстановка арены 800×600.
+var wideCore = Obstacle{X: 400, Y: 300, W: 800, H: 600}
+
+// Линии вдоль открытых коридоров большой карты (верхний и его пара).
+var wideLanes = []float64{131, 1200 - 131}
+
+// coverDist — расстояние от точки до ближайшего препятствия карты.
+func coverDist(m Map, p Vec2) float64 {
+	best := math.Inf(1)
+	for _, o := range m.Obstacles {
+		best = math.Min(best, pointRectDist(p, o))
+	}
+	return best
+}
+
+// Плотность укрытий: в ядре большой карты укрытие в среднем не дальше, чем на
+// арене 800×600, а за ядром — заметно дальше, чем в ядре.
+func TestWideMapCoverDenserInCore(t *testing.T) {
+	mean := func(m Map, keep func(Vec2) bool) float64 {
+		cells, _, _, _ := freeCells(m, 20)
+		sum, n := 0.0, 0
+		for _, p := range cells {
+			if keep(p) {
+				sum += coverDist(m, p)
+				n++
+			}
+		}
+		return sum / float64(n)
+	}
+	all := func(Vec2) bool { return true }
+	inCore := func(p Vec2) bool { return pointRectDist(p, wideCore) == 0 }
+	arena := mean(ArenaMap(), all)
+	m := ArenaWideMap()
+	core := mean(m, inCore)
+	outer := mean(m, func(p Vec2) bool { return !inCore(p) })
+	if core > arena+mapEps {
+		t.Errorf("в ядре до укрытия в среднем %.1f px, на арене %.1f: центр реже арены", core, arena)
+	}
+	if outer < 1.2*core {
+		t.Errorf("за ядром до укрытия в среднем %.1f px, в ядре %.1f: к краям не реже", outer, core)
+	}
+}
+
+// Открытые зоны: вдоль каждого коридора игрок пробегает, а пуля пролетает всю
+// ширину карты без единого препятствия.
+func TestWideMapOpenLanes(t *testing.T) {
+	m := ArenaWideMap()
+	for _, y := range wideLanes {
+		from, to := Vec2{X: 0, Y: y}, Vec2{X: m.Width, Y: y}
+		for _, o := range m.Obstacles {
+			if _, hit := segmentRectT(from, to, o, mapPlayerRadius); hit {
+				t.Errorf("коридор y=%v перекрыт препятствием %+v", y, o)
+			}
 		}
 	}
 }

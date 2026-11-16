@@ -81,26 +81,25 @@ func (z Zone) contains(p Vec2) bool {
 // DefaultMap — карта по умолчанию.
 func DefaultMap() Map { return ArenaMap() }
 
-// LargeMapMinPlayers — с какой вместимости комнаты берётся ArenaLargeMap:
-// на разреженной арене 5–8 игрокам негде укрыться, бой сводится к перестрелке
-// в открытую.
+// LargeMapMinPlayers — с какой вместимости комнаты берётся ArenaWideMap:
+// на арене 800×600 5–8 игрокам тесно и негде укрыться.
 const LargeMapMinPlayers = 5
 
-// LargeMapCrateHits — прочность ящиков на ArenaLargeMap. В бою 5–8 игроков
+// LargeMapCrateHits — прочность ящиков на ArenaWideMap. В бою 5–8 игроков
 // ящики с обычной прочностью (5) разлетались за первые ~40 с раунда, и
-// добавленные укрытия переставали работать.
+// укрытия переставали работать.
 const LargeMapCrateHits = 10
 
 // MapForPlayers — карта для комнаты вместимостью maxPlayers.
 func MapForPlayers(maxPlayers int) Map {
 	if maxPlayers >= LargeMapMinPlayers {
-		return ArenaLargeMap()
+		return ArenaWideMap()
 	}
 	return ArenaMap()
 }
 
 // ConfigForPlayers — DefaultConfig для комнаты вместимостью maxPlayers: карта
-// по вместимости (MapForPlayers), на большой арене — прочные ящики
+// по вместимости (MapForPlayers), на большой карте — прочные ящики
 // (LargeMapCrateHits).
 func ConfigForPlayers(maxPlayers int) Config {
 	cfg := DefaultConfig()
@@ -111,42 +110,117 @@ func ConfigForPlayers(maxPlayers int) Config {
 	return cfg
 }
 
-// ArenaLargeMap — арена для 5–8 игроков: та же ArenaMap (спавны, края,
-// центр, пары ящиков) плюс укрытия в пустых полосах между центром и углами —
-// четыре низкие стены 64×16 над и под центром и по ящику в каждой четверти
-// у боковых краёв. Укрытия симметричны поворотом на 180°, проходы между ними
-// не уже 32 px, спавны остаются за угловыми стенами (проверяет maps_test.go).
-//
-// Патронам — ещё по зоне у каждого нового ящика: при 8 игроках поток ammo
-// выдаёт до 8 коробок (см. Config.AmmoBasePlayers), в две зоны у боковых
-// стенок они не помещаются.
-func ArenaLargeMap() Map {
-	m := ArenaMap()
-	m.Name = "arena-large"
-	m.Obstacles = append(m.Obstacles,
-		// Низкие стены над и под центром: укрытие на линиях, где раньше был пустырь.
-		Obstacle{X: 268, Y: 160, W: 64, H: 16},
-		Obstacle{X: 468, Y: 424, W: 64, H: 16},
-		Obstacle{X: 468, Y: 160, W: 64, H: 16},
-		Obstacle{X: 268, Y: 424, W: 64, H: 16},
-
-		// Ящики в четвертях у боковых краёв, между угловой стеной и боковой стенкой.
-		Obstacle{X: 140, Y: 180, W: 32, H: 32, Kind: ObstacleCrate}, // ↖
-		Obstacle{X: 628, Y: 388, W: 32, H: 32, Kind: ObstacleCrate}, // ↘
-		Obstacle{X: 628, Y: 180, W: 32, H: 32, Kind: ObstacleCrate}, // ↗
-		Obstacle{X: 140, Y: 388, W: 32, H: 32, Kind: ObstacleCrate}, // ↙
-	)
-	zones := map[PickupType][]Zone{}
-	for typ, z := range m.PickupZones {
-		zones[typ] = append([]Zone(nil), z...)
+// withRotations возвращает препятствия вместе с их парами при повороте на 180°
+// вокруг центра карты w×h. Препятствия, совпадающие со своей парой (центральные),
+// передаются отдельно и не дублируются.
+func withRotations(w, h float64, self []Obstacle, half ...Obstacle) []Obstacle {
+	out := append([]Obstacle(nil), self...)
+	for _, o := range half {
+		out = append(out, o, Obstacle{X: w - o.X - o.W, Y: h - o.Y - o.H, W: o.W, H: o.H, Kind: o.Kind})
 	}
-	// Патроны — ещё и с внутренней стороны каждого нового ящика.
-	zones[PickupAmmo] = append(zones[PickupAmmo],
-		RectZone(185, 175, 50, 50), RectZone(565, 375, 50, 50),
-		RectZone(565, 175, 50, 50), RectZone(185, 375, 50, 50),
-	)
-	m.PickupZones = zones
-	return m
+	return out
+}
+
+// spawnRotations — то же для точек.
+func spawnRotations(w, h float64, half ...Vec2) []Vec2 {
+	out := make([]Vec2, 0, 2*len(half))
+	for _, p := range half {
+		out = append(out, p, Vec2{X: w - p.X, Y: h - p.Y})
+	}
+	return out
+}
+
+// zoneRotations — то же для прямоугольных и круглых зон.
+func zoneRotations(w, h float64, half ...Zone) []Zone {
+	out := make([]Zone, 0, 2*len(half))
+	for _, z := range half {
+		r := Zone{X: w - z.X - z.W, Y: h - z.Y - z.H, W: z.W, H: z.H}
+		if z.R > 0 {
+			r = Zone{X: w - z.X, Y: h - z.Y, R: z.R}
+		}
+		out = append(out, z, r)
+	}
+	return out
+}
+
+// ArenaWideMap — карта 1600×1200 для 5–8 игроков, обоих режимов. Симметрична
+// поворотом на 180° вокруг (800, 600), как ArenaMap, и проходит те же проверки
+// maps_test.go (укрытие не дальше 140 px, проходы ≥ 32 px, связность, спавны
+// за укрытием от центра).
+//
+// Устройство — от плотного центра к редким краям:
+//   - ядро [440, 1160]×[348, 852] — расстановка ArenaMap с укрытиями прежней
+//     большой арены, сдвинутая на (400, 300): центральный блок, пары ящиков
+//     со щелью 16 px, угловые и низкие стены — плотность как на арене 800×600;
+//   - открытые зоны для дальнего боя — верхний и нижний коридоры во всю ширину
+//     карты (y ≈ 48…220 и зеркально): внутри коридора укрытий нет, по краю
+//     карты — упоры 16×48, с внутренней стороны — редкий ряд стен и ящиков;
+//     сквозная линия прострела вдоль коридора — 1600 px;
+//   - боковые полосы между ядром и левым/правым краем — редкие одиночные
+//     стены и ящики;
+//   - спавны — по периметру, по два на каждую сторону, за укрытием от центра.
+func ArenaWideMap() Map {
+	const w, h = 1600, 1200
+	return Map{
+		Name:  "arena-wide",
+		Width: w, Height: h,
+		Obstacles: withRotations(w, h,
+			[]Obstacle{{X: 750, Y: 560, W: 100, H: 80}}, // центральный блок
+			// Ядро: ArenaMap и укрытия большой арены, сдвинутые на (400, 300).
+			Obstacle{X: 662, Y: 516, W: 32, H: 32, Kind: ObstacleCrate}, // пара ящиков у центра
+			Obstacle{X: 662, Y: 564, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 500, Y: 400, W: 100, H: 16},                     // угловые стены ядра
+			Obstacle{X: 1000, Y: 400, W: 100, H: 16},                    //
+			Obstacle{X: 440, Y: 570, W: 16, H: 60},                      // боковая стенка ядра
+			Obstacle{X: 784, Y: 348, W: 32, H: 16},                      // стенка над центром
+			Obstacle{X: 668, Y: 460, W: 64, H: 16},                      // низкие стены над центром
+			Obstacle{X: 868, Y: 460, W: 64, H: 16},                      //
+			Obstacle{X: 540, Y: 480, W: 32, H: 32, Kind: ObstacleCrate}, // ящики в четвертях ядра
+			Obstacle{X: 1028, Y: 480, W: 32, H: 32, Kind: ObstacleCrate},
+
+			// Верхний коридор: упоры у края карты.
+			Obstacle{X: 100, Y: 0, W: 16, H: 48},
+			Obstacle{X: 377, Y: 0, W: 16, H: 48},
+			Obstacle{X: 654, Y: 0, W: 16, H: 48},
+			Obstacle{X: 930, Y: 0, W: 16, H: 48},
+			Obstacle{X: 1207, Y: 0, W: 16, H: 48},
+			Obstacle{X: 1484, Y: 0, W: 16, H: 48},
+			Obstacle{X: 0, Y: 210, W: 48, H: 16},    // упоры у боковых краёв в концах коридора
+			Obstacle{X: 1552, Y: 270, W: 48, H: 16}, //
+			// Верхний коридор: внутренний ряд.
+			Obstacle{X: 190, Y: 220, W: 96, H: 16},
+			Obstacle{X: 500, Y: 214, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 548, Y: 214, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 752, Y: 220, W: 96, H: 16},
+			Obstacle{X: 1020, Y: 214, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 1068, Y: 214, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 1314, Y: 220, W: 96, H: 16},
+
+			// Левая полоса.
+			Obstacle{X: 100, Y: 380, W: 16, H: 140},
+			Obstacle{X: 260, Y: 330, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 250, Y: 560, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 250, Y: 608, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 100, Y: 760, W: 120, H: 16},
+			Obstacle{X: 300, Y: 820, W: 32, H: 32, Kind: ObstacleCrate},
+		),
+		Spawns: spawnRotations(w, h,
+			Vec2{X: 240, Y: 36}, Vec2{X: 1360, Y: 36}, // верх
+			Vec2{X: 36, Y: 440}, Vec2{X: 36, Y: 800}, // лево
+		),
+		PickupZones: map[PickupType][]Zone{
+			PickupHealth: {CircleZone(w/2, h/2, 150)},
+			PickupAmmo: zoneRotations(w, h,
+				RectZone(470, 540, 50, 120),  // у боковой стенки ядра
+				RectZone(140, 520, 60, 160),  // в боковой полосе
+				RectZone(280, 100, 120, 60),  // в верхнем коридоре
+				RectZone(1200, 100, 120, 60), //
+			),
+			PickupSpeed: zoneRotations(w, h,
+				RectZone(50, 50, 50, 50), RectZone(1500, 50, 50, 50),
+			),
+		},
+	}
 }
 
 // ArenaMap — разреженная арена 800×600 для дальних перестрелок, симметричная

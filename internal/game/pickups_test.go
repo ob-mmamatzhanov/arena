@@ -332,11 +332,11 @@ func TestAmmoStreamScalesWithPlayers(t *testing.T) {
 	}
 }
 
-// Бой 8 человек на большой арене: патроны появляются в 4 раза чаще и до 8
+// Бой 8 человек на большой карте: патроны появляются в 4 раза чаще и до 8
 // коробок на карте — все находят место в зонах ammo этой карты.
 func TestAmmoForEightPlayersOnLargeMap(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Map = ArenaLargeMap()
+	cfg.Map = ArenaWideMap()
 	cfg.Seed = 7
 	w := NewWorld(cfg)
 	for id := PlayerID(1); id <= 8; id++ {
@@ -366,20 +366,15 @@ func TestAmmoForEightPlayersOnLargeMap(t *testing.T) {
 	}
 }
 
-// Карта по вместимости комнаты: до LargeMapMinPlayers — разреженная арена,
-// с неё — арена с дополнительными укрытиями.
+// Карта по вместимости комнаты: до LargeMapMinPlayers — арена 800×600,
+// с неё — большая карта 1600×1200.
 func TestMapForPlayers(t *testing.T) {
-	for n, want := range map[int]string{2: "arena", 4: "arena", 5: "arena-large", 8: "arena-large"} {
+	for n, want := range map[int]string{2: "arena", 4: "arena", 5: "arena-wide", 8: "arena-wide"} {
 		if got := MapForPlayers(n).Name; got != want {
 			t.Errorf("MapForPlayers(%d) = %s, want %s", n, got, want)
 		}
 	}
-	small, large := ArenaMap(), ArenaLargeMap()
-	if len(large.Obstacles) <= len(small.Obstacles) {
-		t.Errorf("на большой арене укрытий %d, на обычной %d", len(large.Obstacles), len(small.Obstacles))
-	}
-	// ArenaLargeMap не меняет общую ArenaMap (срезы и карта зон скопированы).
-	if len(ArenaMap().Obstacles) != len(small.Obstacles) || len(ArenaMap().PickupZones[PickupAmmo]) != 2 {
-		t.Error("ArenaLargeMap изменила ArenaMap")
+	if m := ArenaWideMap(); m.Width != 1600 || m.Height != 1200 {
+		t.Errorf("ArenaWideMap %vx%v, want 1600x1200", m.Width, m.Height)
 	}
 }
