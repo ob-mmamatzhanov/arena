@@ -109,20 +109,69 @@ func TestMapRotationalSymmetry(t *testing.T) {
 				t.Errorf("препятствию %+v нет пары %+v при повороте на 180°", o, want)
 			}
 		}
-		for _, s := range m.Spawns {
-			want := Vec2{X: m.Width - s.X, Y: m.Height - s.Y}
-			found := false
-			for _, q := range m.Spawns {
-				if near(q.X, want.X) && near(q.Y, want.Y) {
-					found = true
-					break
+		for name, points := range map[string][]Vec2{"спавну": m.Spawns, "точке оружия": m.WeaponSpots} {
+			for _, s := range points {
+				want := Vec2{X: m.Width - s.X, Y: m.Height - s.Y}
+				found := false
+				for _, q := range points {
+					if near(q.X, want.X) && near(q.Y, want.Y) {
+						found = true
+						break
+					}
 				}
-			}
-			if !found {
-				t.Errorf("спавну %v нет пары %v при повороте на 180°", s, want)
+				if !found {
+					t.Errorf("%s %v нет пары %v при повороте на 180°", name, s, want)
+				}
 			}
 		}
 	})
+}
+
+// Точки оружия: их хватает на MaxWeaponPickups одновременно (не ближе
+// PickupMinPickupDist друг к другу), пикап в точке не задевает препятствия и
+// не ближе PickupEdgeMargin к краю, а игрок может встать прямо на неё.
+func TestMapWeaponSpots(t *testing.T) {
+	cfg := DefaultConfig()
+	forEachMap(t, func(t *testing.T, m Map) {
+		if len(m.WeaponSpots) < cfg.MaxWeaponPickups {
+			t.Fatalf("точек оружия %d, нужно ≥ %d", len(m.WeaponSpots), cfg.MaxWeaponPickups)
+		}
+		w := NewWorld(Config{Map: m, PlayerRadius: mapPlayerRadius})
+		for i, s := range m.WeaponSpots {
+			if !w.circleFree(s, cfg.PickupRadius) || !w.isFree(s) {
+				t.Errorf("точка оружия %v задевает препятствие", s)
+			}
+			if e := cfg.PickupEdgeMargin; s.X < e || s.Y < e || s.X > m.Width-e || s.Y > m.Height-e {
+				t.Errorf("точка оружия %v ближе %v к краю", s, e)
+			}
+			for _, q := range m.WeaponSpots[i+1:] {
+				if d := math.Hypot(s.X-q.X, s.Y-q.Y); d < cfg.PickupMinPickupDist {
+					t.Errorf("точки оружия %v и %v в %.0f px, нужно ≥ %v", s, q, d, cfg.PickupMinPickupDist)
+				}
+			}
+		}
+	})
+}
+
+// На большой карте оружие появляется в центре (не дальше 150 px от него) и в
+// открытых коридорах; в каждом коридоре и в центре есть точки.
+func TestWideMapWeaponSpotsInCenterAndLanes(t *testing.T) {
+	m := ArenaWideMap()
+	c := Vec2{X: m.Width / 2, Y: m.Height / 2}
+	inCenter, inLane := 0, map[float64]int{}
+	for _, s := range m.WeaponSpots {
+		switch {
+		case math.Hypot(s.X-c.X, s.Y-c.Y) <= 150:
+			inCenter++
+		case near(s.Y, wideLanes[0]) || near(s.Y, wideLanes[1]):
+			inLane[s.Y]++
+		default:
+			t.Errorf("точка оружия %v ни в центре, ни в коридоре", s)
+		}
+	}
+	if inCenter == 0 || len(inLane) != len(wideLanes) {
+		t.Errorf("в центре %d точек, коридоров с точками %d из %d", inCenter, len(inLane), len(wideLanes))
+	}
 }
 
 func TestMapObstaclesInsideAndDisjoint(t *testing.T) {

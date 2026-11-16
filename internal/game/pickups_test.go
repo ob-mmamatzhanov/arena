@@ -45,7 +45,7 @@ func TestAmmoPickupStreamIndependent(t *testing.T) {
 	w := NewWorld(cfg)
 	w.AddPlayer(1)
 
-	ammo := func() int { return w.countPickups(true) }
+	ammo := func() int { return w.countPickups(streamAmmo) }
 	tickN(w, 9) // 0.45 с
 	if n := ammo(); n != 0 {
 		t.Fatalf("ammo до первого интервала = %d, want 0", n)
@@ -59,7 +59,7 @@ func TestAmmoPickupStreamIndependent(t *testing.T) {
 		t.Fatalf("ammo через 1 с = %d, want 2", n)
 	}
 	tickN(w, 20*10) // общий поток упёрся в свой лимит, ammo — в свой
-	if n, g := ammo(), w.countPickups(false); n != cfg.MaxAmmoPickups || g != cfg.MaxPickups {
+	if n, g := ammo(), w.countPickups(streamGeneral); n != cfg.MaxAmmoPickups || g != cfg.MaxPickups {
 		t.Fatalf("через 11 с ammo = %d, общих = %d, want %d и %d", n, g, cfg.MaxAmmoPickups, cfg.MaxPickups)
 	}
 
@@ -344,12 +344,12 @@ func TestAmmoForEightPlayersOnLargeMap(t *testing.T) {
 	}
 	// 1.25 с на коробку: через 5 с — 4 (при 2 игроках была бы ещё 1).
 	tickN(w, 5*20)
-	if n := w.countPickups(true); n != 4 {
+	if n := w.countPickups(streamAmmo); n != 4 {
 		t.Fatalf("ammo через 5 с при 8 игроках = %d, want 4", n)
 	}
 	// Через 12 с — упор в лимит 8; все в зонах ammo.
 	tickN(w, 7*20)
-	if n := w.countPickups(true); n != 8 {
+	if n := w.countPickups(streamAmmo); n != 8 {
 		t.Fatalf("ammo через 12 с при 8 игроках = %d, want лимит 8", n)
 	}
 	for _, pk := range w.pickups {

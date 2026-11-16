@@ -317,6 +317,11 @@ const (
 	PickupHealth = "health"
 	PickupSpeed  = "speed"
 	PickupAmmo   = "ammo"
+
+	// Оружие: заменяет текущее оружие игрока (player.weapon), см. README.
+	PickupShotgun = "w_shotgun"
+	PickupSMG     = "w_smg"
+	PickupRifle   = "w_rifle"
 )
 
 // Pickup — пикап на карте.

@@ -225,6 +225,13 @@ type Config struct {
 	MaxAmmoPickups     int     // ammo одновременно на карте
 	AmmoBasePlayers    int     // на сколько игроков рассчитаны интервал и лимит ammo
 
+	// Пикапы оружия (w_shotgun, w_smg, w_rifle — тип равновероятно) — свой
+	// поток: раз в WeaponPickupInterval в свободной точке Map.WeaponSpots, не
+	// больше MaxWeaponPickups на карте. Карта без WeaponSpots или
+	// WeaponPickupInterval ≤ 0 — оружие не появляется.
+	WeaponPickupInterval float64 // секунд между появлениями
+	MaxWeaponPickups     int     // оружия одновременно на карте
+
 	// Ящики (Obstacle.Kind == crate) ломаются после CrateHits попаданий пуль и
 	// восстанавливаются в начале раунда (см. crates.go). CrateHits ≤ 0 — ящики
 	// неразрушимы, как кирпич.
@@ -265,6 +272,7 @@ func DefaultConfig() Config {
 		PickupMinPickupDist: 60, PickupEdgeMargin: 50,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
 		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10, AmmoPickupInterval: 5, MaxAmmoPickups: 2, AmmoBasePlayers: 2,
+		WeaponPickupInterval: 30, MaxWeaponPickups: 2,
 		CrateHits: 5,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 		RespawnDelay: 3, RespawnMinKillerDist: 150, InvulnTime: 1,
@@ -294,6 +302,7 @@ type World struct {
 	nextPickup  PickupID
 	pickupTimer float64 // секунд до следующего появления health/speed
 	ammoTimer   float64 // секунд до следующего появления ammo
+	weaponTimer float64 // секунд до следующего появления оружия
 
 	crateHP []int // прочность препятствий параллельно cfg.Obstacles (crates.go)
 
@@ -311,6 +320,7 @@ func NewWorld(cfg Config) *World {
 		timeLeft:    max(cfg.RoundTime, 0),
 		pickupTimer: cfg.PickupInterval,
 		ammoTimer:   cfg.AmmoPickupInterval,
+		weaponTimer: cfg.WeaponPickupInterval,
 		crateHP:     newCrateHP(cfg),
 	}
 	if w.zombiesOn() {

@@ -267,3 +267,134 @@ func TestNewRoundResetsWeapon(t *testing.T) {
 		t.Fatalf("в новом раунде %s (%d), want pistol", p.Weapon, p.WeaponAmmo)
 	}
 }
+
+// Подобранное оружие заменяет текущее с полным запасом патронов; событие
+// pickup — с типом пикапа.
+func TestWeaponPickupReplacesWeapon(t *testing.T) {
+	w := armed(t, testConfig(), WeaponSMG)
+	p := w.players[1]
+	p.WeaponAmmo = 3
+	for _, tc := range []struct {
+		typ  PickupType
+		want WeaponID
+	}{{PickupRifle, WeaponRifle}, {PickupShotgun, WeaponShotgun}, {PickupShotgun, WeaponShotgun}, {PickupSMG, WeaponSMG}} {
+		dropPickup(w, tc.typ, 505, 500)
+		w.Update(dt, nil)
+		if p.Weapon != tc.want || p.WeaponAmmo != w.cfg.Weapons[tc.want].AmmoOnPickup {
+			t.Fatalf("после %s: %s (%d), want %s (%d)", tc.typ, p.Weapon, p.WeaponAmmo, tc.want, w.cfg.Weapons[tc.want].AmmoOnPickup)
+		}
+		if e, ok := findEvent(w.events, EventPickup); !ok || e.Pickup != tc.typ || e.Player != 1 {
+			t.Fatalf("событие pickup = %+v, %v; want %s от 1", e, ok, tc.typ)
+		}
+		p.WeaponAmmo = 1 // такое же оружие тоже даёт полный запас
+	}
+}
+
+// Оружие появляется раз в 30 с в точках карты, не больше двух сразу.
+func TestWeaponPickupsSpawnAtSpotsUpToTwo(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Seed = 3
+	cfg.RoundTime = 0 // раунд не кончается за прогон
+	w := NewWorld(cfg)
+	weapons := func() []Pickup {
+		var out []Pickup
+		for _, pk := range w.pickups {
+			if streamOf(pk.Type) == streamWeapon {
+				out = append(out, pk)
+			}
+		}
+		return out
+	}
+	for _, step := range []struct {
+		ticks, want int
+	}{{ticksFor(30) - 1, 0}, {1, 1}, {ticksFor(30) - 1, 1}, {1, 2}, {ticksFor(60), 2}} {
+		tickN(w, step.ticks)
+		if got := len(weapons()); got != step.want {
+			t.Fatalf("тик %d: оружия на карте %d, want %d", w.tick, got, step.want)
+		}
+	}
+	for _, pk := range weapons() {
+		if _, ok := weaponOf(pk.Type); !ok || !isWeaponSpot(cfg.Map, pk.Pos) {
+			t.Errorf("пикап %s в %v: не оружие или не в точке карты", pk.Type, pk.Pos)
+		}
+	}
+	if a, b := weapons()[0].Pos, weapons()[1].Pos; a == b {
+		t.Errorf("два пикапа оружия в одной точке %v", a)
+	}
+}
+
+func isWeaponSpot(m Map, p Vec2) bool {
+	for _, s := range m.WeaponSpots {
+		if s == p {
+			return true
+		}
+	}
+	return false
+}
+
+// За много появлений встречаются все три вида оружия.
+func TestWeaponPickupTypesVary(t *testing.T) {
+	cfg := testConfig()
+	cfg.Map.WeaponSpots = []Vec2{{X: 200, Y: 200}}
+	cfg.WeaponPickupInterval, cfg.MaxWeaponPickups = dt, 1
+	w := NewWorld(cfg)
+	seen := map[PickupType]int{}
+	for range 300 {
+		w.pickups = w.pickups[:0]
+		w.Update(dt, nil)
+		for _, pk := range w.pickups {
+			seen[pk.Type]++
+		}
+	}
+	for _, wp := range weaponPickups {
+		if seen[wp.typ] < 50 {
+			t.Errorf("%s появился %d раз из 300: %v", wp.typ, seen[wp.typ], seen)
+		}
+	}
+}
+
+// Точка, у которой стоит игрок, пропускается.
+func TestWeaponSpotSkipsPlayers(t *testing.T) {
+	cfg := testConfig()
+	cfg.Map.WeaponSpots = []Vec2{{X: 200, Y: 200}, {X: 800, Y: 800}}
+	cfg.WeaponPickupInterval, cfg.MaxWeaponPickups = 1, 2
+	w := NewWorld(cfg)
+	w.AddPlayer(1)
+	place(w, 1, 210, 200)
+	tickN(w, 2*ticksFor(1))
+	if len(w.pickups) != 1 || w.pickups[0].Pos != (Vec2{X: 800, Y: 800}) {
+		t.Fatalf("пикапы %+v, want один в (800, 800): у (200, 200) стоит игрок", w.pickups)
+	}
+}
+
+// Без точек на карте оружие не появляется, и поток не трогает rng: симуляция
+// та же, что с выключенным потоком.
+func TestWeaponPickupsNeedSpots(t *testing.T) {
+	run := func(interval float64) *World {
+		cfg := testConfig()
+		cfg.PickupInterval, cfg.WeaponPickupInterval, cfg.MaxWeaponPickups = 1, interval, 2
+		w := NewWorld(cfg)
+		w.AddPlayer(1)
+		tickN(w, ticksFor(10))
+		return w
+	}
+	on, off := run(1), run(0)
+	if on.countPickups(streamWeapon) != 0 {
+		t.Fatalf("оружие на карте без точек: %+v", on.pickups)
+	}
+	if on.rng.Uint64() != off.rng.Uint64() {
+		t.Fatal("поток оружия без точек сдвинул rng")
+	}
+}
+
+// Новый раунд убирает оружие с карты и заново заводит его таймер.
+func TestWeaponPickupsResetOnNewRound(t *testing.T) {
+	cfg := DefaultConfig()
+	w := NewWorld(cfg)
+	dropPickup(w, PickupRifle, 400, 230)
+	w.weaponTimer = 1
+	w.startRound()
+	if n := w.countPickups(streamWeapon); n != 0 || w.weaponTimer != cfg.WeaponPickupInterval {
+		t.Fatalf("после нового раунда оружия %d, таймер %.1f; want 0, %.0f", n, w.weaponTimer, cfg.WeaponPickupInterval)
+	}
+}

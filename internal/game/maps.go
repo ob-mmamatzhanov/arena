@@ -23,6 +23,10 @@ type Map struct {
 	// PickupZones — где может появиться пикап данного типа. Тип без зон
 	// появляется в любой свободной точке карты.
 	PickupZones map[PickupType][]Zone
+
+	// WeaponSpots — точки, где появляются пикапы оружия (центр и открытые
+	// зоны карты). Пусто — оружия на карте нет.
+	WeaponSpots []Vec2
 }
 
 // Obstacle — прямоугольник карты: левый верхний угол (X, Y), ширина W, высота H.
@@ -121,8 +125,8 @@ func withRotations(w, h float64, self []Obstacle, half ...Obstacle) []Obstacle {
 	return out
 }
 
-// spawnRotations — то же для точек.
-func spawnRotations(w, h float64, half ...Vec2) []Vec2 {
+// pointRotations — то же для точек (спавны, точки оружия).
+func pointRotations(w, h float64, half ...Vec2) []Vec2 {
 	out := make([]Vec2, 0, 2*len(half))
 	for _, p := range half {
 		out = append(out, p, Vec2{X: w - p.X, Y: h - p.Y})
@@ -204,7 +208,7 @@ func ArenaWideMap() Map {
 			Obstacle{X: 100, Y: 760, W: 120, H: 16},
 			Obstacle{X: 300, Y: 820, W: 32, H: 32, Kind: ObstacleCrate},
 		),
-		Spawns: spawnRotations(w, h,
+		Spawns: pointRotations(w, h,
 			Vec2{X: 240, Y: 36}, Vec2{X: 1360, Y: 36}, // верх
 			Vec2{X: 36, Y: 440}, Vec2{X: 36, Y: 800}, // лево
 		),
@@ -220,6 +224,11 @@ func ArenaWideMap() Map {
 				RectZone(50, 50, 50, 50), RectZone(1500, 50, 50, 50),
 			),
 		},
+		// Оружие — над и под центральным блоком и по две точки в каждом коридоре.
+		WeaponSpots: pointRotations(w, h,
+			Vec2{X: 800, Y: 510},
+			Vec2{X: 500, Y: 131}, Vec2{X: 1100, Y: 131},
+		),
 	}
 }
 
@@ -290,5 +299,8 @@ func ArenaMap() Map {
 				RectZone(50, 500, 50, 50), RectZone(700, 500, 50, 50),
 			},
 		},
+		// Оружие — над и под центральным блоком и в открытых полосах между
+		// боковыми стенками и парами ящиков.
+		WeaponSpots: pointRotations(w, h, Vec2{X: 400, Y: 230}, Vec2{X: 160, Y: 300}),
 	}
 }
