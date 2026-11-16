@@ -373,7 +373,7 @@ func TestShutdown(t *testing.T) {
 }
 
 // Комнатам на 5–8 игроков (и автозаполнению — оно создаёт комнаты на 8)
-// достаётся карта 1400×1050 и ящики на 10 попаданий,
+// достаётся карта 1400×1050 и ящики на 15 попаданий,
 // комнатам поменьше — обычная арена и ящики на 5.
 func TestGameConfigMapByCapacity(t *testing.T) {
 	type want struct {
@@ -382,7 +382,7 @@ func TestGameConfigMapByCapacity(t *testing.T) {
 	}
 	for n, w := range map[int]want{
 		2: {"arena", 5}, 4: {"arena", 5},
-		5: {"arena-wide", 10}, room.MaxPlayers: {"arena-wide", 10},
+		5: {"arena-wide", 15}, room.MaxPlayers: {"arena-wide", 15},
 	} {
 		for _, mode := range Modes {
 			cfg := gameConfig(mode, n)

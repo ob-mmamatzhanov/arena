@@ -91,8 +91,21 @@ const LargeMapMinPlayers = 5
 
 // LargeMapCrateHits — прочность ящиков на ArenaWideMap. В бою 5–8 игроков
 // ящики с обычной прочностью (5) разлетались за первые ~40 с раунда, и
-// укрытия переставали работать.
-const LargeMapCrateHits = 10
+// укрытия переставали работать. С прочностью 10 и частым оружием
+// (LargeMapWeapon*: дробь и винтовка бьют по ящикам) за раунд всё равно
+// ломалось больше половины ящиков — отсюда 15.
+const LargeMapCrateHits = 15
+
+// Оружие на ArenaWideMap. С обычным потоком (раз в 30 с, не больше двух) в бою
+// 8 игроков за 200 с подобрали 4 ствола, и 87 убийств из 90 были из
+// пистолета: оружие почти не участвовало в игре. На большой карте оно
+// появляется вдвое чаще, лежит до четырёх стволов сразу, и патронов в
+// подобранном стволе в LargeMapWeaponAmmoFactor раз больше.
+const (
+	LargeMapWeaponPickupInterval = 15  // секунд между появлениями
+	LargeMapMaxWeaponPickups     = 4   // оружия одновременно на карте
+	LargeMapWeaponAmmoFactor     = 1.5 // множитель AmmoOnPickup
+)
 
 // MapForPlayers — карта для комнаты вместимостью maxPlayers.
 func MapForPlayers(maxPlayers int) Map {
@@ -104,12 +117,17 @@ func MapForPlayers(maxPlayers int) Map {
 
 // ConfigForPlayers — DefaultConfig для комнаты вместимостью maxPlayers: карта
 // по вместимости (MapForPlayers), на большой карте — прочные ящики
-// (LargeMapCrateHits).
+// (LargeMapCrateHits) и больше оружия (LargeMapWeapon*).
 func ConfigForPlayers(maxPlayers int) Config {
 	cfg := DefaultConfig()
 	cfg.Map = MapForPlayers(maxPlayers)
 	if maxPlayers >= LargeMapMinPlayers {
 		cfg.CrateHits = LargeMapCrateHits
+		cfg.WeaponPickupInterval = LargeMapWeaponPickupInterval
+		cfg.MaxWeaponPickups = LargeMapMaxWeaponPickups
+		for i := range cfg.Weapons {
+			cfg.Weapons[i].AmmoOnPickup = int(math.Round(float64(cfg.Weapons[i].AmmoOnPickup) * LargeMapWeaponAmmoFactor))
+		}
 	}
 	return cfg
 }

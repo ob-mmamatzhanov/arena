@@ -399,3 +399,25 @@ func TestWeaponPickupsResetOnNewRound(t *testing.T) {
 		t.Fatalf("после нового раунда оружия %d, таймер %.1f; want 0, %.0f", n, w.weaponTimer, cfg.WeaponPickupInterval)
 	}
 }
+
+// Большая карта: оружие появляется чаще, его больше, и в подобранном стволе
+// больше патронов; на обычной арене — значения DefaultConfig.
+func TestConfigForPlayersWeapons(t *testing.T) {
+	def := DefaultConfig()
+	small, large := ConfigForPlayers(4), ConfigForPlayers(8)
+	if small.WeaponPickupInterval != def.WeaponPickupInterval || small.MaxWeaponPickups != def.MaxWeaponPickups || small.Weapons != def.Weapons {
+		t.Errorf("арена на 4: оружие %v/%d, want как в DefaultConfig", small.WeaponPickupInterval, small.MaxWeaponPickups)
+	}
+	if large.WeaponPickupInterval != 15 || large.MaxWeaponPickups != 4 {
+		t.Errorf("большая карта: раз в %v с, до %d; want 15, 4", large.WeaponPickupInterval, large.MaxWeaponPickups)
+	}
+	want := map[WeaponID]int{WeaponPistol: 0, WeaponShotgun: 12, WeaponSMG: 60, WeaponRifle: 8}
+	for id, n := range want {
+		if got := large.Weapons[id].AmmoOnPickup; got != n {
+			t.Errorf("большая карта: %s с %d патронами, want %d", id, got, n)
+		}
+	}
+	if len(large.Map.WeaponSpots) < large.MaxWeaponPickups {
+		t.Errorf("точек оружия %d меньше лимита %d", len(large.Map.WeaponSpots), large.MaxWeaponPickups)
+	}
+}
