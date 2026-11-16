@@ -22,8 +22,8 @@ func TestHeatGrowsWhileFiring(t *testing.T) {
 	place(w, 1, 500, 500)
 
 	w.Update(dt, map[PlayerID]Input{1: {Seq: 1, Fire: true}})
-	if h := playerState(t, w, 1).Heat; !approx(h, cfg.HeatPerShot) {
-		t.Fatalf("heat after first shot = %v, want %v", h, cfg.HeatPerShot)
+	if h := playerState(t, w, 1).Heat; !approx(h, cfg.Weapons[WeaponPistol].HeatPerShot) {
+		t.Fatalf("heat after first shot = %v, want %v", h, cfg.Weapons[WeaponPistol].HeatPerShot)
 	}
 
 	// Огонь зажат: выстрел раз в 4 тика (+0.2), между ними остывание 3×0.025.
@@ -72,7 +72,7 @@ func TestNoSpreadAtZeroHeat(t *testing.T) {
 		w.Update(dt, map[PlayerID]Input{1: {Seq: 1, Angle: angle, Fire: true}})
 		v := w.Snapshot().Bullets[0].Vel
 		a := playerState(t, w, 1).Angle // нормализованный сервером угол прицела
-		if want := (Vec2{X: math.Cos(a) * cfg.BulletSpeed, Y: math.Sin(a) * cfg.BulletSpeed}); v != want {
+		if want := (Vec2{X: math.Cos(a) * cfg.Weapons[WeaponPistol].BulletSpeed, Y: math.Sin(a) * cfg.Weapons[WeaponPistol].BulletSpeed}); v != want {
 			t.Fatalf("seed %d: cold shot vel = %v, want exactly %v", seed, v, want)
 		}
 	}

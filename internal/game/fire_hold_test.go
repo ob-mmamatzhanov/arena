@@ -44,7 +44,7 @@ func TestFireExpiresWithoutFreshInput(t *testing.T) {
 	}
 }
 
-// Удержание огня с вводом каждый тик — очередь в темпе FireCooldown (0.2 с):
+// Удержание огня с вводом каждый тик — очередь в темпе кулдауна пистолета (0.2 с):
 // за 1 с — 5 выстрелов.
 func TestHeldFireKeepsFiring(t *testing.T) {
 	w := fireWorld(DefaultConfig().FireHoldTime)
@@ -82,10 +82,19 @@ func TestFireHoldDisabled(t *testing.T) {
 	}
 }
 
-// Срок удержания короче перезарядки — иначе клик мог бы дать второй выстрел.
+// Срок удержания короче перезарядки любого оружия (в тиках) — иначе клик мог
+// бы дать второй выстрел. У smg кулдаун 0.09 с меньше FireHoldTime 0.1, но в
+// тиках оба — 2: клик всё равно стреляет один раз.
 func TestDefaultFireHoldShorterThanCooldown(t *testing.T) {
-	cfg := DefaultConfig()
-	if cfg.FireHoldTime <= 0 || cfg.FireHoldTime >= cfg.FireCooldown {
-		t.Fatalf("FireHoldTime %.2f должен быть в (0, FireCooldown %.2f)", cfg.FireHoldTime, cfg.FireCooldown)
+	if DefaultConfig().FireHoldTime <= 0 {
+		t.Fatal("FireHoldTime по умолчанию выключен")
+	}
+	for id := range NumWeapons {
+		w := fireWorld(DefaultConfig().FireHoldTime)
+		w.giveWeapon(w.players[1], id)
+		got := shotsDuring(w, 20, func(i int) (Input, bool) { return Input{Fire: true}, i == 0 })
+		if got != 1 {
+			t.Errorf("%s: один ввод с fire и 1 с тишины: выстрелов %d, want 1", id, got)
+		}
 	}
 }

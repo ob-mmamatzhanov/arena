@@ -134,7 +134,7 @@ func TestRespawnOnlyInFreePoint(t *testing.T) {
 		w.AddPlayer(2)
 		place(w, 1, 100, 950)
 		place(w, 2, 300, 950)
-		w.players[2].HP = cfg.BulletDamage
+		w.players[2].HP = cfg.Weapons[WeaponPistol].Damage
 
 		fireOnce(w, 1, 0)
 		hits := runCollectHits(w, 20)

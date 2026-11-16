@@ -526,6 +526,9 @@ func (r *Room) broadcast(s game.Snapshot) {
 				HP:         e.HP,
 				ZombieID:   uint32(e.Zombie),
 			}
+			if e.Type == game.EventShot {
+				msg.Events[i].Weapon = e.Weapon.String()
+			}
 		}
 	}
 	if len(s.Zombies) > 0 { // nil → поле zombies опускается (omitempty)
@@ -556,19 +559,21 @@ func (r *Room) broadcast(s game.Snapshot) {
 	for i, p := range s.Players {
 		pr := r.profileOf(p.ID)
 		msg.Players[i] = anet.PlayerState{
-			ID:      uint32(p.ID),
-			Name:    pr.name,
-			Color:   pr.color,
-			X:       p.Pos.X,
-			Y:       p.Pos.Y,
-			Angle:   p.Angle,
-			Heat:    p.Heat,
-			HP:      p.HP,
-			Score:   p.Score,
-			Ammo:    p.Ammo,
-			Boosted: p.Boosted,
-			DashCd:  p.DashCd,
-			LastSeq: p.LastSeq,
+			ID:         uint32(p.ID),
+			Name:       pr.name,
+			Color:      pr.color,
+			X:          p.Pos.X,
+			Y:          p.Pos.Y,
+			Angle:      p.Angle,
+			Heat:       p.Heat,
+			HP:         p.HP,
+			Score:      p.Score,
+			Ammo:       p.Ammo,
+			Weapon:     p.Weapon.String(),
+			WeaponAmmo: p.WeaponAmmo,
+			Boosted:    p.Boosted,
+			DashCd:     p.DashCd,
+			LastSeq:    p.LastSeq,
 
 			Dead:      p.Dead,
 			RespawnIn: p.RespawnIn,

@@ -166,7 +166,7 @@ func (s *recStore) snapshot() []scoreUpdate {
 func TestKillRecordedToLeaderboard(t *testing.T) {
 	cfg := game.DefaultConfig()
 	cfg.Map = game.Map{Name: "open", Width: 800, Height: 600}
-	cfg.BulletDamage = game.StartHP // одно попадание — фраг
+	cfg.Weapons[game.WeaponPistol].Damage = game.StartHP // одно попадание — фраг
 	cfg.InvulnTime = 0
 	st := newRecStore()
 	rm := New("test", st, slog.New(slog.DiscardHandler))

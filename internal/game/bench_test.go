@@ -41,11 +41,12 @@ func benchUpdate(b *testing.B, cfg Config) {
 	for i := range template {
 		a := 2 * math.Pi * float64(i) / float64(len(template))
 		template[i] = Bullet{
-			ID:    BulletID(i + 1),
-			Owner: PlayerID(i%8 + 1),
-			Pos:   Vec2{X: 500 + 150*math.Cos(a), Y: 500 + 150*math.Sin(a)},
-			Vel:   Vec2{X: cfg.BulletSpeed * math.Cos(a), Y: cfg.BulletSpeed * math.Sin(a)},
-			ttl:   cfg.BulletLifetime,
+			ID:     BulletID(i + 1),
+			Owner:  PlayerID(i%8 + 1),
+			Pos:    Vec2{X: 500 + 150*math.Cos(a), Y: 500 + 150*math.Sin(a)},
+			Vel:    Vec2{X: cfg.Weapons[WeaponPistol].BulletSpeed * math.Cos(a), Y: cfg.Weapons[WeaponPistol].BulletSpeed * math.Sin(a)},
+			Damage: cfg.Weapons[WeaponPistol].Damage,
+			ttl:    cfg.Weapons[WeaponPistol].BulletTTL,
 		}
 	}
 	w.bullets = make([]Bullet, 0, len(template)+8)

@@ -307,15 +307,29 @@ func TestFireProducesBulletsAndHits(t *testing.T) {
 	})
 	pa, _ := findPlayer(s, a)
 	pb, _ := findPlayer(s, b)
+	if pa.Weapon != "pistol" || pa.WeaponAmmo != 0 {
+		t.Fatalf("оружие при входе %q (%d патронов), want pistol (0)", pa.Weapon, pa.WeaponAmmo)
+	}
 
 	// a целится в стоящего b и зажимает огонь.
 	angle := math.Atan2(pb.Y-pa.Y, pb.X-pa.X)
 	rm.PushInput(anet.PlayerInput{PlayerID: a, Input: anet.Input{Seq: 1, Angle: angle, Fire: true}})
 
-	got := ca.snapshotUntil(t, func(s anet.Snapshot) bool { return len(s.Bullets) > 0 })
+	var shot anet.Event
+	got := ca.snapshotUntil(t, func(s anet.Snapshot) bool {
+		for _, e := range s.Events {
+			if e.Type == anet.EventShot {
+				shot = e
+			}
+		}
+		return len(s.Bullets) > 0
+	})
 	bl := got.Bullets[0]
 	if bl.Owner != a || bl.ID == 0 || math.Hypot(bl.VX, bl.VY) == 0 {
 		t.Fatalf("bullet = %+v, want moving bullet owned by %d", bl, a)
+	}
+	if shot.PlayerID != a || shot.Weapon != "pistol" {
+		t.Fatalf("shot = %+v, want от %d из pistol", shot, a)
 	}
 
 	var h anet.Event

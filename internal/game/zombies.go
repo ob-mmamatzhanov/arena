@@ -213,6 +213,7 @@ func (w *World) bitePlayer(p *Player) {
 		return
 	}
 	w.emit(Event{Type: EventKill, Target: p.ID})
+	p.resetWeapon()
 	p.HP = 0
 	p.waitWave = true
 	p.killer = 0
@@ -262,12 +263,13 @@ func (w *World) firstZombie(from, to Vec2) (int, Vec2, float64, bool) {
 	return best, bestP, bestT, best >= 0
 }
 
-// hitZombie — пуля стрелка shooter попала в зомби i в точке at. Ранение —
-// bulletHit (пуля погасла), убийство — zombieKill и +1 к счёту стрелка.
+// hitZombie — пуля стрелка shooter с уроном damage попала в зомби i в точке
+// at. Ранение — bulletHit (пуля погасла), убийство — zombieKill и +1 к счёту
+// стрелка.
 // Убитый остаётся в срезе с HP ≤ 0 до updateZombies этого же тика.
-func (w *World) hitZombie(i int, shooter PlayerID, at Vec2) {
+func (w *World) hitZombie(i int, shooter PlayerID, at Vec2, damage int) {
 	z := &w.zg.zombies[i]
-	z.HP -= w.cfg.BulletDamage
+	z.HP -= damage
 	if z.HP > 0 {
 		w.emit(Event{Type: EventBulletHit, Pos: at})
 		return
