@@ -195,7 +195,7 @@ func TestConfigForPlayersCrateHits(t *testing.T) {
 			}
 		}
 	}
-	if LargeMapCrateHits != 10 {
-		t.Errorf("LargeMapCrateHits = %d, want 10", LargeMapCrateHits)
+	if LargeMapCrateHits != 15 {
+		t.Errorf("LargeMapCrateHits = %d, want 15", LargeMapCrateHits)
 	}
 }

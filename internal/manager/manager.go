@@ -63,7 +63,7 @@ var (
 func ValidMode(mode string) bool { return slices.Contains(Modes, mode) }
 
 // gameConfig — конфиг мира для режима и вместимости комнаты. Карта и прочность
-// ящиков зависят от вместимости: от game.LargeMapMinPlayers — карта 1600×1200
+// ящиков зависят от вместимости: от game.LargeMapMinPlayers — карта 1400×1050
 // (game.ArenaWideMap) с ящиками на game.LargeMapCrateHits попаданий
 // (game.ConfigForPlayers). Режим zombie включает в мире волны зомби
 // (game.ZombieModeConfig) на той же карте.

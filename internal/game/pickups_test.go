@@ -367,14 +367,14 @@ func TestAmmoForEightPlayersOnLargeMap(t *testing.T) {
 }
 
 // Карта по вместимости комнаты: до LargeMapMinPlayers — арена 800×600,
-// с неё — большая карта 1600×1200.
+// с неё — большая карта 1400×1050.
 func TestMapForPlayers(t *testing.T) {
 	for n, want := range map[int]string{2: "arena", 4: "arena", 5: "arena-wide", 8: "arena-wide"} {
 		if got := MapForPlayers(n).Name; got != want {
 			t.Errorf("MapForPlayers(%d) = %s, want %s", n, got, want)
 		}
 	}
-	if m := ArenaWideMap(); m.Width != 1600 || m.Height != 1200 {
-		t.Errorf("ArenaWideMap %vx%v, want 1600x1200", m.Width, m.Height)
+	if m := ArenaWideMap(); m.Width != 1400 || m.Height != 1050 {
+		t.Errorf("ArenaWideMap %vx%v, want 1400x1050", m.Width, m.Height)
 	}
 }
