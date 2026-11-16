@@ -19,9 +19,9 @@ func armed(t *testing.T, cfg Config, id WeaponID) *World {
 func TestDefaultWeaponsTable(t *testing.T) {
 	want := map[string]Weapon{
 		"pistol":  {ID: WeaponPistol, Damage: 25, CooldownMs: 200, BulletSpeed: 500, BulletTTL: 1.5, Pellets: 1, SpreadRad: 0, HeatPerShot: 0.2, AmmoOnPickup: 0},
-		"shotgun": {ID: WeaponShotgun, Damage: 12, CooldownMs: 700, BulletSpeed: 500, BulletTTL: 0.35, Pellets: 6, SpreadRad: 0.2, HeatPerShot: 0.4, AmmoOnPickup: 8},
-		"smg":     {ID: WeaponSMG, Damage: 14, CooldownMs: 90, BulletSpeed: 550, BulletTTL: 1.2, Pellets: 1, SpreadRad: 0, HeatPerShot: 0.12, AmmoOnPickup: 40},
-		"rifle":   {ID: WeaponRifle, Damage: 70, CooldownMs: 1100, BulletSpeed: 1100, BulletTTL: 1.5, Pellets: 1, SpreadRad: 0, HeatPerShot: 0, AmmoOnPickup: 5},
+		"shotgun": {ID: WeaponShotgun, Damage: 16, CooldownMs: 650, BulletSpeed: 600, BulletTTL: 0.5, Pellets: 6, SpreadRad: 0.17, HeatPerShot: 0.4, AmmoOnPickup: 8},
+		"smg":     {ID: WeaponSMG, Damage: 17, CooldownMs: 90, BulletSpeed: 550, BulletTTL: 1.2, Pellets: 1, SpreadRad: 0, HeatPerShot: 0.12, AmmoOnPickup: 40},
+		"rifle":   {ID: WeaponRifle, Damage: 70, CooldownMs: 1300, BulletSpeed: 1100, BulletTTL: 1.5, Pellets: 1, SpreadRad: 0, HeatPerShot: 0, AmmoOnPickup: 5},
 	}
 	table := DefaultWeapons()
 	for i, wp := range table {
@@ -40,7 +40,7 @@ func TestDefaultWeaponsTable(t *testing.T) {
 	}
 }
 
-// Дробовик: один выстрел — 6 пуль веером ±0.2 рад с равным шагом вокруг
+// Дробовик: один выстрел — 6 пуль веером ±SpreadRad с равным шагом вокруг
 // направления взгляда, с уроном, скоростью и временем жизни дробовика; одно
 // событие shot с оружием, один патрон.
 func TestShotgunFiresSixPelletFan(t *testing.T) {
@@ -54,7 +54,7 @@ func TestShotgunFiresSixPelletFan(t *testing.T) {
 		t.Fatalf("пуль после выстрела %d, want 6", len(w.bullets))
 	}
 	for k, b := range w.bullets {
-		want := aim - 0.2 + 0.4*float64(k)/5 // от −0.2 до +0.2, шаг 0.08
+		want := aim - sg.SpreadRad + 2*sg.SpreadRad*float64(k)/5 // от −SpreadRad до +SpreadRad, равный шаг
 		if got := math.Atan2(b.Vel.Y, b.Vel.X); math.Abs(got-want) > 1e-9 {
 			t.Errorf("дробина %d под углом %.4f, want %.4f", k, got, want)
 		}
@@ -82,21 +82,22 @@ func TestShotgunFiresSixPelletFan(t *testing.T) {
 	}
 }
 
-// Дробины летят 0.35 с (175 px): цель в 60 px, где веер ±0.2 рад ещё уже
-// хитбокса (±12 px), получает весь заряд, в 250 px — ничего.
+// Дробины летят 0.5 с со скоростью 600 (300 px): цель в 60 px, где веер
+// ±0.17 рад ещё уже хитбокса (±12 px), получает весь заряд, в 350 px — ничего.
 func TestShotgunRange(t *testing.T) {
+	sg := DefaultWeapons()[WeaponShotgun]
 	for _, tc := range []struct {
 		dist float64
 		hit  bool
-	}{{60, true}, {250, false}} {
+	}{{60, true}, {350, false}} {
 		w := armed(t, testConfig(), WeaponShotgun)
 		w.AddPlayer(2)
 		place(w, 2, 500+tc.dist, 500)
 		fireOnce(w, 1, 0)
 		tickN(w, 20)
 		lost := StartHP - w.players[2].HP
-		if tc.hit && lost != 6*12 {
-			t.Errorf("цель в %.0f px потеряла %d hp, want весь заряд %d", tc.dist, lost, 6*12)
+		if full := min(sg.Pellets*sg.Damage, StartHP); tc.hit && lost != full {
+			t.Errorf("цель в %.0f px потеряла %d hp, want весь заряд %d", tc.dist, lost, full)
 		}
 		if !tc.hit && lost != 0 {
 			t.Errorf("цель в %.0f px потеряла %d hp, want 0: дробь не долетает", tc.dist, lost)
@@ -104,15 +105,15 @@ func TestShotgunRange(t *testing.T) {
 	}
 }
 
-// Пуля несёт урон своего оружия: попадание из smg снимает 14 hp, а не 25.
+// Пуля несёт урон своего оружия: попадание из smg снимает 17 hp, а не 25.
 func TestBulletCarriesWeaponDamage(t *testing.T) {
 	w := armed(t, testConfig(), WeaponSMG)
 	w.AddPlayer(2)
 	place(w, 2, 700, 500)
 	fireOnce(w, 1, 0)
 	hits := runCollectHits(w, 20)
-	if len(hits) != 1 || w.players[2].HP != StartHP-14 {
-		t.Fatalf("попаданий %d, hp цели %d; want 1, %d", len(hits), w.players[2].HP, StartHP-14)
+	if len(hits) != 1 || w.players[2].HP != StartHP-17 {
+		t.Fatalf("попаданий %d, hp цели %d; want 1, %d", len(hits), w.players[2].HP, StartHP-17)
 	}
 }
 
@@ -144,7 +145,7 @@ func TestRifleKillsZombieInOneHit(t *testing.T) {
 // Кулдаун: при зажатом огне выстрелы идут через ⌈CooldownMs / dt⌉ тиков —
 // не чаще кулдауна; у smg 90 мс при тике 50 мс — раз в 2 тика.
 func TestWeaponCooldowns(t *testing.T) {
-	want := map[WeaponID]int{WeaponPistol: 4, WeaponShotgun: 14, WeaponSMG: 2, WeaponRifle: 22}
+	want := map[WeaponID]int{WeaponPistol: 4, WeaponShotgun: 13, WeaponSMG: 2, WeaponRifle: 26}
 	for id := range NumWeapons {
 		cfg := testConfig()
 		cfg.Weapons[id].AmmoOnPickup = 1000 // патроны не кончаются за прогон

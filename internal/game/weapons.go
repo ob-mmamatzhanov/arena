@@ -70,11 +70,11 @@ func DefaultWeapons() [NumWeapons]Weapon {
 	return [NumWeapons]Weapon{
 		WeaponPistol: {ID: WeaponPistol, Damage: 25, CooldownMs: 200, BulletSpeed: 500, BulletTTL: 1.5,
 			Pellets: 1, HeatPerShot: 0.2},
-		WeaponShotgun: {ID: WeaponShotgun, Damage: 12, CooldownMs: 700, BulletSpeed: 500, BulletTTL: 0.35,
-			Pellets: 6, SpreadRad: 0.2, HeatPerShot: 0.4, AmmoOnPickup: 8},
-		WeaponSMG: {ID: WeaponSMG, Damage: 14, CooldownMs: 90, BulletSpeed: 550, BulletTTL: 1.2,
+		WeaponShotgun: {ID: WeaponShotgun, Damage: 16, CooldownMs: 650, BulletSpeed: 600, BulletTTL: 0.5,
+			Pellets: 6, SpreadRad: 0.17, HeatPerShot: 0.4, AmmoOnPickup: 8},
+		WeaponSMG: {ID: WeaponSMG, Damage: 17, CooldownMs: 90, BulletSpeed: 550, BulletTTL: 1.2,
 			Pellets: 1, HeatPerShot: 0.12, AmmoOnPickup: 40},
-		WeaponRifle: {ID: WeaponRifle, Damage: 70, CooldownMs: 1100, BulletSpeed: 1100, BulletTTL: 1.5,
+		WeaponRifle: {ID: WeaponRifle, Damage: 70, CooldownMs: 1300, BulletSpeed: 1100, BulletTTL: 1.5,
 			Pellets: 1, AmmoOnPickup: 5},
 	}
 }
