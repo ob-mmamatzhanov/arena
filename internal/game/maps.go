@@ -147,87 +147,89 @@ func zoneRotations(w, h float64, half ...Zone) []Zone {
 	return out
 }
 
-// ArenaWideMap — карта 1600×1200 для 5–8 игроков, обоих режимов. Симметрична
-// поворотом на 180° вокруг (800, 600), как ArenaMap, и проходит те же проверки
+// ArenaWideMap — карта 1400×1050 для 5–8 игроков, обоих режимов. Симметрична
+// поворотом на 180° вокруг (700, 525), как ArenaMap, и проходит те же проверки
 // maps_test.go (укрытие не дальше 140 px, проходы ≥ 32 px, связность, спавны
 // за укрытием от центра).
 //
 // Устройство — от плотного центра к редким краям:
-//   - ядро [440, 1160]×[348, 852] — расстановка ArenaMap с укрытиями прежней
-//     большой арены, сдвинутая на (400, 300): центральный блок, пары ящиков
+//   - ядро [340, 1060]×[273, 777] — расстановка ArenaMap с укрытиями прежней
+//     большой арены, сдвинутая на (300, 225): центральный блок, пары ящиков
 //     со щелью 16 px, угловые и низкие стены — плотность как на арене 800×600;
 //   - открытые зоны для дальнего боя — верхний и нижний коридоры во всю ширину
-//     карты (y ≈ 48…220 и зеркально): внутри коридора укрытий нет, по краю
+//     карты (y ≈ 48…157 и зеркально): внутри коридора укрытий нет, по краю
 //     карты — упоры 16×48, с внутренней стороны — редкий ряд стен и ящиков;
-//     сквозная линия прострела вдоль коридора — 1600 px;
+//     сквозная линия прострела вдоль коридора — 1400 px;
 //   - боковые полосы между ядром и левым/правым краем — редкие одиночные
 //     стены и ящики;
 //   - спавны — по периметру, по два на каждую сторону, за укрытием от центра.
+//
+// Прежняя версия была 1600×1200: ядро то же, а коридоры и боковые полосы
+// сжаты на четверть — до соперника меньше бежать, обзор камеры покрывает
+// бóльшую часть карты.
 func ArenaWideMap() Map {
-	const w, h = 1600, 1200
+	const w, h = 1400, 1050
 	return Map{
 		Name:  "arena-wide",
 		Width: w, Height: h,
 		Obstacles: withRotations(w, h,
-			[]Obstacle{{X: 750, Y: 560, W: 100, H: 80}}, // центральный блок
-			// Ядро: ArenaMap и укрытия большой арены, сдвинутые на (400, 300).
-			Obstacle{X: 662, Y: 516, W: 32, H: 32, Kind: ObstacleCrate}, // пара ящиков у центра
-			Obstacle{X: 662, Y: 564, W: 32, H: 32, Kind: ObstacleCrate},
-			Obstacle{X: 500, Y: 400, W: 100, H: 16},                     // угловые стены ядра
-			Obstacle{X: 1000, Y: 400, W: 100, H: 16},                    //
-			Obstacle{X: 440, Y: 570, W: 16, H: 60},                      // боковая стенка ядра
-			Obstacle{X: 784, Y: 348, W: 32, H: 16},                      // стенка над центром
-			Obstacle{X: 668, Y: 460, W: 64, H: 16},                      // низкие стены над центром
-			Obstacle{X: 868, Y: 460, W: 64, H: 16},                      //
-			Obstacle{X: 540, Y: 480, W: 32, H: 32, Kind: ObstacleCrate}, // ящики в четвертях ядра
-			Obstacle{X: 1028, Y: 480, W: 32, H: 32, Kind: ObstacleCrate},
+			[]Obstacle{{X: 650, Y: 485, W: 100, H: 80}}, // центральный блок
+			// Ядро: ArenaMap и укрытия большой арены, сдвинутые на (300, 225).
+			Obstacle{X: 562, Y: 441, W: 32, H: 32, Kind: ObstacleCrate}, // пара ящиков у центра
+			Obstacle{X: 562, Y: 489, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 400, Y: 325, W: 100, H: 16},                     // угловые стены ядра
+			Obstacle{X: 900, Y: 325, W: 100, H: 16},                     //
+			Obstacle{X: 340, Y: 495, W: 16, H: 60},                      // боковая стенка ядра
+			Obstacle{X: 684, Y: 273, W: 32, H: 16},                      // стенка над центром
+			Obstacle{X: 568, Y: 385, W: 64, H: 16},                      // низкие стены над центром
+			Obstacle{X: 768, Y: 385, W: 64, H: 16},                      //
+			Obstacle{X: 440, Y: 405, W: 32, H: 32, Kind: ObstacleCrate}, // ящики в четвертях ядра
+			Obstacle{X: 928, Y: 405, W: 32, H: 32, Kind: ObstacleCrate},
 
 			// Верхний коридор: упоры у края карты.
-			Obstacle{X: 100, Y: 0, W: 16, H: 48},
-			Obstacle{X: 377, Y: 0, W: 16, H: 48},
-			Obstacle{X: 654, Y: 0, W: 16, H: 48},
-			Obstacle{X: 930, Y: 0, W: 16, H: 48},
-			Obstacle{X: 1207, Y: 0, W: 16, H: 48},
-			Obstacle{X: 1484, Y: 0, W: 16, H: 48},
-			Obstacle{X: 0, Y: 210, W: 48, H: 16},    // упоры у боковых краёв в концах коридора
-			Obstacle{X: 1552, Y: 270, W: 48, H: 16}, //
+			Obstacle{X: 73, Y: 0, W: 16, H: 48},
+			Obstacle{X: 281, Y: 0, W: 16, H: 48},
+			Obstacle{X: 554, Y: 0, W: 16, H: 48},
+			Obstacle{X: 830, Y: 0, W: 16, H: 48},
+			Obstacle{X: 1103, Y: 0, W: 16, H: 48},
+			Obstacle{X: 1311, Y: 0, W: 16, H: 48},
+			Obstacle{X: 0, Y: 156, W: 48, H: 16},    // упоры у боковых краёв в концах коридора
+			Obstacle{X: 1352, Y: 201, W: 48, H: 16}, //
 			// Верхний коридор: внутренний ряд.
-			Obstacle{X: 190, Y: 220, W: 96, H: 16},
-			Obstacle{X: 500, Y: 214, W: 32, H: 32, Kind: ObstacleCrate},
-			Obstacle{X: 548, Y: 214, W: 32, H: 32, Kind: ObstacleCrate},
-			Obstacle{X: 752, Y: 220, W: 96, H: 16},
-			Obstacle{X: 1020, Y: 214, W: 32, H: 32, Kind: ObstacleCrate},
-			Obstacle{X: 1068, Y: 214, W: 32, H: 32, Kind: ObstacleCrate},
-			Obstacle{X: 1314, Y: 220, W: 96, H: 16},
+			Obstacle{X: 400, Y: 157, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 448, Y: 157, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 652, Y: 163, W: 96, H: 16},
+			Obstacle{X: 920, Y: 157, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 968, Y: 157, W: 32, H: 32, Kind: ObstacleCrate},
 
 			// Левая полоса.
-			Obstacle{X: 100, Y: 380, W: 16, H: 140},
-			Obstacle{X: 260, Y: 330, W: 32, H: 32, Kind: ObstacleCrate},
-			Obstacle{X: 250, Y: 560, W: 32, H: 32, Kind: ObstacleCrate},
-			Obstacle{X: 250, Y: 608, W: 32, H: 32, Kind: ObstacleCrate},
-			Obstacle{X: 100, Y: 760, W: 120, H: 16},
-			Obstacle{X: 300, Y: 820, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 100, Y: 305, W: 16, H: 140},
+			Obstacle{X: 191, Y: 255, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 184, Y: 485, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 184, Y: 533, W: 32, H: 32, Kind: ObstacleCrate},
+			Obstacle{X: 100, Y: 685, W: 120, H: 16},
+			Obstacle{X: 221, Y: 745, W: 32, H: 32, Kind: ObstacleCrate},
 		),
 		Spawns: pointRotations(w, h,
-			Vec2{X: 240, Y: 36}, Vec2{X: 1360, Y: 36}, // верх
-			Vec2{X: 36, Y: 440}, Vec2{X: 36, Y: 800}, // лево
+			Vec2{X: 180, Y: 36}, Vec2{X: 1220, Y: 36}, // верх
+			Vec2{X: 36, Y: 365}, Vec2{X: 36, Y: 725}, // лево
 		),
 		PickupZones: map[PickupType][]Zone{
 			PickupHealth: {CircleZone(w/2, h/2, 150)},
 			PickupAmmo: zoneRotations(w, h,
-				RectZone(470, 540, 50, 120),  // у боковой стенки ядра
-				RectZone(140, 520, 60, 160),  // в боковой полосе
-				RectZone(280, 100, 120, 60),  // в верхнем коридоре
-				RectZone(1200, 100, 120, 60), //
+				RectZone(370, 465, 50, 120), // у боковой стенки ядра
+				RectZone(98, 445, 60, 160),  // в боковой полосе
+				RectZone(195, 68, 120, 60),  // в верхнем коридоре
+				RectZone(1085, 68, 120, 60), //
 			),
 			PickupSpeed: zoneRotations(w, h,
-				RectZone(50, 50, 50, 50), RectZone(1500, 50, 50, 50),
+				RectZone(50, 50, 50, 50), RectZone(1300, 50, 50, 50),
 			),
 		},
 		// Оружие — над и под центральным блоком и по две точки в каждом коридоре.
 		WeaponSpots: pointRotations(w, h,
-			Vec2{X: 800, Y: 510},
-			Vec2{X: 500, Y: 131}, Vec2{X: 1100, Y: 131},
+			Vec2{X: 700, Y: 435},
+			Vec2{X: 400, Y: 98}, Vec2{X: 1000, Y: 98},
 		),
 	}
 }

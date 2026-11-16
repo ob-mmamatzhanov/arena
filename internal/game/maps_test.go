@@ -518,10 +518,10 @@ func TestArenaPickupZonesPlacement(t *testing.T) {
 }
 
 // Ядро большой карты — прямоугольник, куда вписана расстановка арены 800×600.
-var wideCore = Obstacle{X: 400, Y: 300, W: 800, H: 600}
+var wideCore = Obstacle{X: 300, Y: 225, W: 800, H: 600}
 
 // Линии вдоль открытых коридоров большой карты (верхний и его пара).
-var wideLanes = []float64{131, 1200 - 131}
+var wideLanes = []float64{98, 1050 - 98}
 
 // coverDist — расстояние от точки до ближайшего препятствия карты.
 func coverDist(m Map, p Vec2) float64 {
