@@ -6,7 +6,7 @@ type EventType string
 const (
 	EventHit       EventType = "hit"       // пуля попала в игрока: Pos, Target, Shooter
 	EventKill      EventType = "kill"      // попадание убило цель: Target, Shooter
-	EventShot      EventType = "shot"      // выстрел: Player, Pos (точка вылета)
+	EventShot      EventType = "shot"      // выстрел: Player, Pos (точка вылета), Weapon
 	EventBulletHit EventType = "bulletHit" // пуля ударилась о стену, границу мира или неуязвимого игрока: Pos
 	EventPickup    EventType = "pickup"    // игрок подобрал пикап: Player, Pickup
 	EventRespawn   EventType = "respawn"   // игрок возродился: Player, Pos
@@ -34,6 +34,7 @@ type Event struct {
 	Obstacle int        // crateHit, crateBroken: индекс в cfg.Obstacles
 	HP       int        // crateHit: прочность ящика после попадания
 	Zombie   ZombieID   // zombieKill
+	Weapon   WeaponID   // shot: из чего стреляли
 }
 
 func (w *World) emit(e Event) { w.events = append(w.events, e) }

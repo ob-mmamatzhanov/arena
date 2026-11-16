@@ -61,14 +61,14 @@ func TestFireSpawnsBulletInAimDirection(t *testing.T) {
 	if b.Owner != 1 || !approx(b.Pos.X, 500) || !approx(b.Pos.Y, 500) {
 		t.Fatalf("bullet = %+v, want owner 1 at shooter position (500, 500)", b)
 	}
-	if !approx(b.Vel.X, 0) || !approx(b.Vel.Y, cfg.BulletSpeed) {
-		t.Fatalf("bullet vel = %v, want (0, %v)", b.Vel, cfg.BulletSpeed)
+	if !approx(b.Vel.X, 0) || !approx(b.Vel.Y, cfg.Weapons[WeaponPistol].BulletSpeed) {
+		t.Fatalf("bullet vel = %v, want (0, %v)", b.Vel, cfg.Weapons[WeaponPistol].BulletSpeed)
 	}
 
 	// Следующий тик: пуля летит, новой нет (кулдаун).
 	w.Update(dt, nil)
 	s = w.Snapshot()
-	if len(s.Bullets) != 1 || !approx(s.Bullets[0].Pos.Y, 500+cfg.BulletSpeed*dt) {
+	if len(s.Bullets) != 1 || !approx(s.Bullets[0].Pos.Y, 500+cfg.Weapons[WeaponPistol].BulletSpeed*dt) {
 		t.Fatalf("after tick bullets = %+v", s.Bullets)
 	}
 }
@@ -118,8 +118,8 @@ func TestBulletHitsOtherPlayer(t *testing.T) {
 	if d := math.Hypot(h.Pos.X-300, h.Pos.Y-500); d > cfg.HitRadius+cfg.BulletRadius+eps {
 		t.Fatalf("hit pos %v too far from target (%v)", h.Pos, d)
 	}
-	if hp := playerState(t, w, 2).HP; hp != StartHP-cfg.BulletDamage {
-		t.Fatalf("target hp = %d, want %d", hp, StartHP-cfg.BulletDamage)
+	if hp := playerState(t, w, 2).HP; hp != StartHP-cfg.Weapons[WeaponPistol].Damage {
+		t.Fatalf("target hp = %d, want %d", hp, StartHP-cfg.Weapons[WeaponPistol].Damage)
 	}
 	if hp := playerState(t, w, 1).HP; hp != StartHP {
 		t.Fatalf("shooter hp = %d, want %d (no self-hit)", hp, StartHP)
@@ -148,7 +148,7 @@ func TestKillGivesScoreAndRespawns(t *testing.T) {
 	w := newWorldWith(t, 1, 2)
 	place(w, 1, 100, 500)
 	place(w, 2, 300, 500)
-	w.players[2].HP = cfg.BulletDamage // умрёт с одного попадания
+	w.players[2].HP = cfg.Weapons[WeaponPistol].Damage // умрёт с одного попадания
 
 	fireOnce(w, 1, 0)
 	hits := runCollectHits(w, 20)
@@ -186,7 +186,7 @@ func TestRespawnDeterministicBySeed(t *testing.T) {
 		w.AddPlayer(2)
 		place(w, 1, 100, 500)
 		place(w, 2, 300, 500)
-		w.players[2].HP = cfg.BulletDamage
+		w.players[2].HP = cfg.Weapons[WeaponPistol].Damage
 		fireOnce(w, 1, 0)
 		runCollectHits(w, 20)
 		return w.players[2].Pos
@@ -230,7 +230,7 @@ func TestBulletDoesNotHitShooter(t *testing.T) {
 
 func TestFastBulletDoesNotTunnel(t *testing.T) {
 	cfg := testConfig()
-	cfg.BulletSpeed = 10000 // 500 единиц за тик — больше диаметра цели
+	cfg.Weapons[WeaponPistol].BulletSpeed = 10000 // 500 единиц за тик — больше диаметра цели
 	w := NewWorld(cfg)
 	w.AddPlayer(1)
 	w.AddPlayer(2)
@@ -246,7 +246,7 @@ func TestFastBulletDoesNotTunnel(t *testing.T) {
 
 func TestBulletHitsNearestTargetFirst(t *testing.T) {
 	cfg := testConfig()
-	cfg.BulletSpeed = 10000
+	cfg.Weapons[WeaponPistol].BulletSpeed = 10000
 	w := NewWorld(cfg)
 	for _, id := range []PlayerID{1, 2, 3} {
 		w.AddPlayer(id)
@@ -274,7 +274,7 @@ func TestBulletRemovedOutsideWorld(t *testing.T) {
 
 func TestBulletExpires(t *testing.T) {
 	cfg := testConfig()
-	cfg.BulletSpeed = 100 // за время жизни (1.5 с) пролетит 150 — остаётся в мире
+	cfg.Weapons[WeaponPistol].BulletSpeed = 100 // за время жизни (1.5 с) пролетит 150 — остаётся в мире
 	w := NewWorld(cfg)
 	w.AddPlayer(1)
 	place(w, 1, 500, 500)

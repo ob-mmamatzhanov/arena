@@ -70,7 +70,7 @@ func TestKillEventFollowsHit(t *testing.T) {
 	w := newWorldWith(t, 1, 2)
 	place(w, 1, 100, 500)
 	place(w, 2, 300, 500)
-	w.players[2].HP = w.cfg.BulletDamage
+	w.players[2].HP = w.cfg.Weapons[WeaponPistol].Damage
 
 	fireOnce(w, 1, 0)
 	for _, evs := range eventsByTick(w, 20) {
@@ -131,7 +131,7 @@ func TestBulletHitEventOnWallAndBorder(t *testing.T) {
 
 func TestExpiredBulletEmitsNoEvent(t *testing.T) {
 	cfg := testConfig()
-	cfg.BulletSpeed = 100 // за 1.5 с пролетит 150 и истечёт внутри мира
+	cfg.Weapons[WeaponPistol].BulletSpeed = 100 // за 1.5 с пролетит 150 и истечёт внутри мира
 	w := NewWorld(cfg)
 	w.AddPlayer(1)
 	place(w, 1, 500, 500)

@@ -7,7 +7,7 @@ import (
 
 // allMaps — все карты игры. Новая карта добавляется сюда и проходит те же проверки.
 func allMaps() []Map {
-	return []Map{ArenaMap(), ArenaLargeMap()}
+	return []Map{ArenaMap(), ArenaWideMap()}
 }
 
 // Параметры принципов карты (см. ArenaMap).
@@ -109,20 +109,69 @@ func TestMapRotationalSymmetry(t *testing.T) {
 				t.Errorf("препятствию %+v нет пары %+v при повороте на 180°", o, want)
 			}
 		}
-		for _, s := range m.Spawns {
-			want := Vec2{X: m.Width - s.X, Y: m.Height - s.Y}
-			found := false
-			for _, q := range m.Spawns {
-				if near(q.X, want.X) && near(q.Y, want.Y) {
-					found = true
-					break
+		for name, points := range map[string][]Vec2{"спавну": m.Spawns, "точке оружия": m.WeaponSpots} {
+			for _, s := range points {
+				want := Vec2{X: m.Width - s.X, Y: m.Height - s.Y}
+				found := false
+				for _, q := range points {
+					if near(q.X, want.X) && near(q.Y, want.Y) {
+						found = true
+						break
+					}
 				}
-			}
-			if !found {
-				t.Errorf("спавну %v нет пары %v при повороте на 180°", s, want)
+				if !found {
+					t.Errorf("%s %v нет пары %v при повороте на 180°", name, s, want)
+				}
 			}
 		}
 	})
+}
+
+// Точки оружия: их хватает на MaxWeaponPickups одновременно (не ближе
+// PickupMinPickupDist друг к другу), пикап в точке не задевает препятствия и
+// не ближе PickupEdgeMargin к краю, а игрок может встать прямо на неё.
+func TestMapWeaponSpots(t *testing.T) {
+	cfg := DefaultConfig()
+	forEachMap(t, func(t *testing.T, m Map) {
+		if len(m.WeaponSpots) < cfg.MaxWeaponPickups {
+			t.Fatalf("точек оружия %d, нужно ≥ %d", len(m.WeaponSpots), cfg.MaxWeaponPickups)
+		}
+		w := NewWorld(Config{Map: m, PlayerRadius: mapPlayerRadius})
+		for i, s := range m.WeaponSpots {
+			if !w.circleFree(s, cfg.PickupRadius) || !w.isFree(s) {
+				t.Errorf("точка оружия %v задевает препятствие", s)
+			}
+			if e := cfg.PickupEdgeMargin; s.X < e || s.Y < e || s.X > m.Width-e || s.Y > m.Height-e {
+				t.Errorf("точка оружия %v ближе %v к краю", s, e)
+			}
+			for _, q := range m.WeaponSpots[i+1:] {
+				if d := math.Hypot(s.X-q.X, s.Y-q.Y); d < cfg.PickupMinPickupDist {
+					t.Errorf("точки оружия %v и %v в %.0f px, нужно ≥ %v", s, q, d, cfg.PickupMinPickupDist)
+				}
+			}
+		}
+	})
+}
+
+// На большой карте оружие появляется в центре (не дальше 150 px от него) и в
+// открытых коридорах; в каждом коридоре и в центре есть точки.
+func TestWideMapWeaponSpotsInCenterAndLanes(t *testing.T) {
+	m := ArenaWideMap()
+	c := Vec2{X: m.Width / 2, Y: m.Height / 2}
+	inCenter, inLane := 0, map[float64]int{}
+	for _, s := range m.WeaponSpots {
+		switch {
+		case math.Hypot(s.X-c.X, s.Y-c.Y) <= 150:
+			inCenter++
+		case near(s.Y, wideLanes[0]) || near(s.Y, wideLanes[1]):
+			inLane[s.Y]++
+		default:
+			t.Errorf("точка оружия %v ни в центре, ни в коридоре", s)
+		}
+	}
+	if inCenter == 0 || len(inLane) != len(wideLanes) {
+		t.Errorf("в центре %d точек, коридоров с точками %d из %d", inCenter, len(inLane), len(wideLanes))
+	}
 }
 
 func TestMapObstaclesInsideAndDisjoint(t *testing.T) {
@@ -464,6 +513,63 @@ func TestArenaPickupZonesPlacement(t *testing.T) {
 	for _, typ := range []PickupType{PickupHealth, PickupAmmo, PickupSpeed} {
 		if len(m.PickupZones[typ]) == 0 {
 			t.Errorf("у типа %s нет зон", typ)
+		}
+	}
+}
+
+// Ядро большой карты — прямоугольник, куда вписана расстановка арены 800×600.
+var wideCore = Obstacle{X: 400, Y: 300, W: 800, H: 600}
+
+// Линии вдоль открытых коридоров большой карты (верхний и его пара).
+var wideLanes = []float64{131, 1200 - 131}
+
+// coverDist — расстояние от точки до ближайшего препятствия карты.
+func coverDist(m Map, p Vec2) float64 {
+	best := math.Inf(1)
+	for _, o := range m.Obstacles {
+		best = math.Min(best, pointRectDist(p, o))
+	}
+	return best
+}
+
+// Плотность укрытий: в ядре большой карты укрытие в среднем не дальше, чем на
+// арене 800×600, а за ядром — заметно дальше, чем в ядре.
+func TestWideMapCoverDenserInCore(t *testing.T) {
+	mean := func(m Map, keep func(Vec2) bool) float64 {
+		cells, _, _, _ := freeCells(m, 20)
+		sum, n := 0.0, 0
+		for _, p := range cells {
+			if keep(p) {
+				sum += coverDist(m, p)
+				n++
+			}
+		}
+		return sum / float64(n)
+	}
+	all := func(Vec2) bool { return true }
+	inCore := func(p Vec2) bool { return pointRectDist(p, wideCore) == 0 }
+	arena := mean(ArenaMap(), all)
+	m := ArenaWideMap()
+	core := mean(m, inCore)
+	outer := mean(m, func(p Vec2) bool { return !inCore(p) })
+	if core > arena+mapEps {
+		t.Errorf("в ядре до укрытия в среднем %.1f px, на арене %.1f: центр реже арены", core, arena)
+	}
+	if outer < 1.2*core {
+		t.Errorf("за ядром до укрытия в среднем %.1f px, в ядре %.1f: к краям не реже", outer, core)
+	}
+}
+
+// Открытые зоны: вдоль каждого коридора игрок пробегает, а пуля пролетает всю
+// ширину карты без единого препятствия.
+func TestWideMapOpenLanes(t *testing.T) {
+	m := ArenaWideMap()
+	for _, y := range wideLanes {
+		from, to := Vec2{X: 0, Y: y}, Vec2{X: m.Width, Y: y}
+		for _, o := range m.Obstacles {
+			if _, hit := segmentRectT(from, to, o, mapPlayerRadius); hit {
+				t.Errorf("коридор y=%v перекрыт препятствием %+v", y, o)
+			}
 		}
 	}
 }

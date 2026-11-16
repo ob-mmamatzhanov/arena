@@ -23,7 +23,7 @@ func newDuel(t *testing.T, cfg Config) *World {
 	place(w, 1, 100, 500)
 	place(w, 2, 300, 500)
 	w.players[1].invulnLeft, w.players[2].invulnLeft = 0, 0
-	w.players[2].HP = cfg.BulletDamage
+	w.players[2].HP = cfg.Weapons[WeaponPistol].Damage
 	return w
 }
 
@@ -239,7 +239,7 @@ func TestInvulnerableTakesNoDamageButCanFire(t *testing.T) {
 	if hp := playerState(t, w, 2).HP; hp != StartHP {
 		t.Fatalf("hp неуязвимого = %d, want %d", hp, StartHP)
 	}
-	if hp := playerState(t, w, 1).HP; hp != StartHP-w.cfg.BulletDamage {
+	if hp := playerState(t, w, 1).HP; hp != StartHP-w.cfg.Weapons[WeaponPistol].Damage {
 		t.Fatalf("пуля неуязвимого не нанесла урон: hp 1 = %d", hp)
 	}
 }
@@ -273,14 +273,14 @@ func TestInvulnerabilityBoundaryAfterRespawn(t *testing.T) {
 		t.Fatal("перед 20-м тиком после респауна уже уязвим")
 	}
 	at := p.Pos
-	w.applyHit(1, p, at)
+	w.applyHit(1, p, at, w.cfg.Weapons[WeaponPistol].Damage)
 	if p.HP != StartHP {
 		t.Fatalf("урон в последнем тике неуязвимости: hp %d", p.HP)
 	}
 	tickN(w, 1)
-	w.applyHit(1, p, at)
-	if p.HP != StartHP-w.cfg.BulletDamage {
-		t.Fatalf("после неуязвимости hp = %d, want %d", p.HP, StartHP-w.cfg.BulletDamage)
+	w.applyHit(1, p, at, w.cfg.Weapons[WeaponPistol].Damage)
+	if p.HP != StartHP-w.cfg.Weapons[WeaponPistol].Damage {
+		t.Fatalf("после неуязвимости hp = %d, want %d", p.HP, StartHP-w.cfg.Weapons[WeaponPistol].Damage)
 	}
 }
 

@@ -91,19 +91,24 @@ type Obstacle struct {
 
 // PlayerState — состояние одного игрока в снапшоте.
 type PlayerState struct {
-	ID      uint32  `json:"id"`
-	Name    string  `json:"name"`
-	Color   int     `json:"color"` // индекс в палитре из 8 цветов, у занятых — разные
-	X       float64 `json:"x"`
-	Y       float64 `json:"y"`
-	Angle   float64 `json:"angle"`
-	Heat    float64 `json:"heat"` // перегрев [0, 1]: разброс ±heat×0.25 рад, для прицела
-	HP      int     `json:"hp"`
-	Score   int     `json:"score"`
-	Ammo    int     `json:"ammo"`
-	Boosted bool    `json:"boosted"` // действует ускорение от пикапа speed
-	DashCd  float64 `json:"dashCd"`  // секунд до готовности рывка, 0 — готов
-	LastSeq uint32  `json:"lastSeq"`
+	ID    uint32  `json:"id"`
+	Name  string  `json:"name"`
+	Color int     `json:"color"` // индекс в палитре из 8 цветов, у занятых — разные
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	Angle float64 `json:"angle"`
+	Heat  float64 `json:"heat"` // перегрев [0, 1]: разброс ±heat×0.25 рад, для прицела
+	HP    int     `json:"hp"`
+	Score int     `json:"score"`
+	Ammo  int     `json:"ammo"` // общие патроны (ими стреляет пистолет)
+	// Weapon — текущее оружие: pistol, shotgun, smg, rifle. WeaponAmmo —
+	// выстрелов в нём; у пистолета 0 (он стреляет ammo). На последнем патроне
+	// подобранного оружия, после смерти и в новом раунде — снова pistol.
+	Weapon     string  `json:"weapon"`
+	WeaponAmmo int     `json:"weaponAmmo"`
+	Boosted    bool    `json:"boosted"` // действует ускорение от пикапа speed
+	DashCd     float64 `json:"dashCd"`  // секунд до готовности рывка, 0 — готов
+	LastSeq    uint32  `json:"lastSeq"`
 	// Мёртвый игрок ждёт респауна: не цель, не двигается, ввод игнорируется.
 	Dead      bool    `json:"dead"`
 	RespawnIn float64 `json:"respawnIn"` // секунд до респауна, 0 у живого
@@ -141,7 +146,7 @@ const (
 //
 //	hit:         {type, x, y, targetId, shooterId}
 //	kill:        {type, targetId, shooterId}
-//	shot:        {type, playerId, x, y}
+//	shot:        {type, playerId, x, y, weapon} — один на выстрел (у дробовика — на весь веер)
 //	bulletHit:   {type, x, y}            — пуля ударилась о стену, границу или неуязвимого игрока
 //	pickup:      {type, playerId, pickupType}
 //	respawn:     {type, playerId, x, y}
@@ -166,6 +171,7 @@ type Event struct {
 	Obstacle   int     `json:"obstacle"`
 	HP         int     `json:"hp"`
 	ZombieID   uint32  `json:"zombieId"`
+	Weapon     string  `json:"weapon"`
 }
 
 // MarshalJSON сериализует только поля, относящиеся к типу события.
@@ -188,7 +194,14 @@ func (e Event) MarshalJSON() ([]byte, error) {
 			TargetID  uint32 `json:"targetId"`
 			ShooterID uint32 `json:"shooterId"`
 		}{e.Type, e.TargetID, e.ShooterID})
-	case EventShot, EventRespawn:
+	case EventShot:
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			PlayerID uint32 `json:"playerId"`
+			xy
+			Weapon string `json:"weapon"`
+		}{e.Type, e.PlayerID, xy{e.X, e.Y}, e.Weapon})
+	case EventRespawn:
 		return json.Marshal(struct {
 			Type     string `json:"type"`
 			PlayerID uint32 `json:"playerId"`
@@ -304,6 +317,11 @@ const (
 	PickupHealth = "health"
 	PickupSpeed  = "speed"
 	PickupAmmo   = "ammo"
+
+	// Оружие: заменяет текущее оружие игрока (player.weapon), см. README.
+	PickupShotgun = "w_shotgun"
+	PickupSMG     = "w_smg"
+	PickupRifle   = "w_rifle"
 )
 
 // Pickup — пикап на карте.

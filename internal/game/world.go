@@ -42,8 +42,11 @@ type Player struct {
 	Heat     float64 // перегрев ствола [0, 1]: определяет разброс выстрелов
 	HP       int
 	Score    int
-	Ammo     int    // патроны; при MaxAmmo ≤ 0 не расходуются
+	Ammo     int    // общие патроны (пистолет); при MaxAmmo ≤ 0 не расходуются
 	LastSeq  uint32 // seq последнего применённого ввода — для client-side reconciliation
+
+	Weapon     WeaponID // текущее оружие (weapons.go)
+	WeaponAmmo int      // патроны подобранного оружия; у пистолета 0 — он стреляет Ammo
 
 	speedLeft float64 // секунд ускорения от пикапа speed
 
@@ -69,16 +72,19 @@ func (p *Player) invulnerable() bool { return p.invulnLeft > timeEps }
 
 // PlayerState — неизменяемая копия состояния игрока для снапшота.
 type PlayerState struct {
-	ID      PlayerID
-	Pos     Vec2
-	Angle   float64
-	Heat    float64
-	HP      int
-	Score   int
-	Ammo    int
-	Boosted bool    // действует ускорение от пикапа
-	DashCd  float64 // секунд до готовности рывка, 0 — готов
-	LastSeq uint32
+	ID     PlayerID
+	Pos    Vec2
+	Angle  float64
+	Heat   float64
+	HP     int
+	Score  int
+	Ammo   int
+	Weapon WeaponID
+	// WeaponAmmo — патроны текущего оружия, 0 у пистолета (он стреляет Ammo).
+	WeaponAmmo int
+	Boosted    bool    // действует ускорение от пикапа
+	DashCd     float64 // секунд до готовности рывка, 0 — готов
+	LastSeq    uint32
 
 	Dead      bool
 	RespawnIn float64 // секунд до респауна, 0 у живого
@@ -90,11 +96,12 @@ type BulletID uint32
 
 // Bullet — летящая пуля.
 type Bullet struct {
-	ID    BulletID
-	Owner PlayerID
-	Pos   Vec2
-	Vel   Vec2    // единиц в секунду
-	ttl   float64 // оставшееся время жизни, секунды
+	ID     BulletID
+	Owner  PlayerID
+	Pos    Vec2
+	Vel    Vec2    // единиц в секунду
+	Damage int     // урон оружия, из которого выпущена
+	ttl    float64 // оставшееся время жизни, секунды
 }
 
 // BulletState — копия пули для снапшота.
@@ -162,25 +169,26 @@ type Config struct {
 	PlayerRadius float64 // радиус тела: коллизии с краями мира и препятствиями
 	HitRadius    float64 // радиус хитбокса игрока для попаданий пуль
 
-	BulletSpeed    float64 // единиц в секунду
-	BulletRadius   float64
-	BulletLifetime float64 // секунды
-	FireCooldown   float64 // минимальный интервал между выстрелами, секунды
-	BulletDamage   int
+	BulletRadius float64
+
+	// Weapons — таблица оружия (weapons.go): урон, кулдаун, скорость и время
+	// жизни пули, дробины, перегрев. Индекс — WeaponID.
+	Weapons [NumWeapons]Weapon
+
 	// FireHoldTime — сколько секунд Fire из ввода действует, если новых вводов
 	// нет: дальше огонь считается отпущенным. Клиент шлёт ввод каждый тик, так
 	// что удержание огня продлевается непрерывно, а один пропущенный тик (сетевой
 	// джиттер) его не прерывает. Без лимита клик, после которого ввод замолк
-	// (лаг, фоновая вкладка), стрелял бы снова по каждому истечению FireCooldown.
-	// Должно быть меньше FireCooldown. ≤ 0 — Fire держится до следующего ввода.
+	// (лаг, фоновая вкладка), стрелял бы снова по каждому истечению кулдауна.
+	// Окно удержания (в тиках) должно быть короче кулдауна любого оружия
+	// (в тиках). ≤ 0 — Fire держится до следующего ввода.
 	FireHoldTime float64
 
-	// Отдача: каждый выстрел добавляет HeatPerShot (heat ≤ 1), каждую секунду
-	// без выстрела снимается HeatDecay. Отклонение пули от Angle — равномерно
-	// в ±heat×MaxSpread радиан.
-	HeatPerShot float64
-	HeatDecay   float64 // в секунду
-	MaxSpread   float64 // радианы при heat = 1
+	// Отдача: каждый выстрел добавляет HeatPerShot своего оружия (heat ≤ 1),
+	// каждую секунду без выстрела снимается HeatDecay. Отклонение выстрела от
+	// Angle — равномерно в ±heat×MaxSpread радиан.
+	HeatDecay float64 // в секунду
+	MaxSpread float64 // радианы при heat = 1
 
 	// Раунды. RoundTime ≤ 0 отключает лимит времени, KillLimit ≤ 0 — лимит фрагов
 	// (оба отключены — раунд бесконечен).
@@ -217,6 +225,13 @@ type Config struct {
 	MaxAmmoPickups     int     // ammo одновременно на карте
 	AmmoBasePlayers    int     // на сколько игроков рассчитаны интервал и лимит ammo
 
+	// Пикапы оружия (w_shotgun, w_smg, w_rifle — тип равновероятно) — свой
+	// поток: раз в WeaponPickupInterval в свободной точке Map.WeaponSpots, не
+	// больше MaxWeaponPickups на карте. Карта без WeaponSpots или
+	// WeaponPickupInterval ≤ 0 — оружие не появляется.
+	WeaponPickupInterval float64 // секунд между появлениями
+	MaxWeaponPickups     int     // оружия одновременно на карте
+
 	// Ящики (Obstacle.Kind == crate) ломаются после CrateHits попаданий пуль и
 	// восстанавливаются в начале раунда (см. crates.go). CrateHits ≤ 0 — ящики
 	// неразрушимы, как кирпич.
@@ -250,13 +265,14 @@ func DefaultConfig() Config {
 	return Config{
 		Map:         DefaultMap(),
 		PlayerSpeed: 200, PlayerRadius: 12, HitRadius: 12,
-		BulletSpeed: 500, BulletRadius: 3, BulletLifetime: 1.5, FireCooldown: 0.2, BulletDamage: 25, FireHoldTime: 0.1,
-		HeatPerShot: 0.2, HeatDecay: 0.5, MaxSpread: 0.25,
+		BulletRadius: 3, Weapons: DefaultWeapons(), FireHoldTime: 0.1,
+		HeatDecay: 0.5, MaxSpread: 0.25,
 		RoundTime: 120, KillLimit: 10, IntermissionTime: 8,
 		PickupInterval: 20, MaxPickups: 3, PickupRadius: 10, PickupMinPlayerDist: 40,
 		PickupMinPickupDist: 60, PickupEdgeMargin: 50,
 		HealthAmount: 50, SpeedMultiplier: 1.6, SpeedDuration: 5,
 		StartAmmo: 12, MaxAmmo: 30, AmmoAmount: 10, AmmoPickupInterval: 5, MaxAmmoPickups: 2, AmmoBasePlayers: 2,
+		WeaponPickupInterval: 30, MaxWeaponPickups: 2,
 		CrateHits: 5,
 		DashSpeed: 700, DashDuration: 0.15, DashCooldown: 3,
 		RespawnDelay: 3, RespawnMinKillerDist: 150, InvulnTime: 1,
@@ -286,6 +302,7 @@ type World struct {
 	nextPickup  PickupID
 	pickupTimer float64 // секунд до следующего появления health/speed
 	ammoTimer   float64 // секунд до следующего появления ammo
+	weaponTimer float64 // секунд до следующего появления оружия
 
 	crateHP []int // прочность препятствий параллельно cfg.Obstacles (crates.go)
 
@@ -303,6 +320,7 @@ func NewWorld(cfg Config) *World {
 		timeLeft:    max(cfg.RoundTime, 0),
 		pickupTimer: cfg.PickupInterval,
 		ammoTimer:   cfg.AmmoPickupInterval,
+		weaponTimer: cfg.WeaponPickupInterval,
 		crateHP:     newCrateHP(cfg),
 	}
 	if w.zombiesOn() {
@@ -403,7 +421,7 @@ func (w *World) Update(dt float64, inputs map[PlayerID]Input) {
 	// Неуязвимость тикает после попаданий: выданная в тике T защищает от
 	// попаданий ровно InvulnTime — в тиках T … T+InvulnTime/dt−1.
 	// Fire без свежего ввода гаснет после выстрелов: ввод тика T с FireHoldTime
-	// 0.1 действует в тиках T и T+1 — меньше FireCooldown, повторного выстрела нет.
+	// 0.1 действует в тиках T и T+1 — меньше кулдауна любого оружия, повторного выстрела нет.
 	for _, id := range ids {
 		p := w.players[id]
 		p.invulnLeft = max(p.invulnLeft-dt, 0)
@@ -443,6 +461,7 @@ func (w *World) killPlayer(target *Player, shooter PlayerID) {
 	}
 	w.emit(Event{Type: EventKill, Target: target.ID, Shooter: shooter})
 	target.killer = shooter
+	target.resetWeapon()
 	if w.cfg.RespawnDelay <= 0 {
 		w.respawn(target)
 		return
@@ -533,6 +552,7 @@ func (w *World) startRound() {
 		p.HP = StartHP
 		p.Score = 0
 		p.Ammo = w.cfg.StartAmmo
+		p.resetWeapon()
 		p.respawnLeft, p.killer, p.waitWave = 0, 0, false
 		p.invulnLeft = max(w.cfg.InvulnTime, 0)
 		p.Pos = w.respawnPoint(id, 0)
@@ -747,9 +767,9 @@ func (w *World) updateBullets(dt float64, ids []PlayerID) {
 		}
 		if hit {
 			if zi >= 0 {
-				w.hitZombie(zi, b.Owner, at)
+				w.hitZombie(zi, b.Owner, at, b.Damage)
 			} else {
-				w.applyHit(b.Owner, target, at)
+				w.applyHit(b.Owner, target, at, b.Damage)
 			}
 			continue
 		}
@@ -801,22 +821,23 @@ func (w *World) firstHit(owner PlayerID, from, to Vec2, ids []PlayerID) (*Player
 	return best, bestP, bestT, best != nil
 }
 
-// applyHit наносит урон; при HP ≤ 0 цель погибает (см. killPlayer).
+// applyHit наносит урон пули; при HP ≤ 0 цель погибает (см. killPlayer).
 // Неуязвимая цель останавливает пулю без урона — как стена, событием bulletHit.
-func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2) {
+func (w *World) applyHit(shooter PlayerID, target *Player, at Vec2, damage int) {
 	if target.invulnerable() {
 		w.emit(Event{Type: EventBulletHit, Pos: at})
 		return
 	}
-	target.HP -= w.cfg.BulletDamage
+	target.HP -= damage
 	w.emit(Event{Type: EventHit, Pos: at, Target: target.ID, Shooter: shooter})
 	if target.HP <= 0 {
 		w.killPlayer(target, shooter)
 	}
 }
 
-// fire создаёт пули для игроков с зажатым огнём и истёкшим кулдауном.
-// Пуля вылетает из позиции игрока; по владельцу она не попадает (см. firstHit).
+// fire стреляет текущим оружием игроков с зажатым огнём и истёкшим кулдауном
+// (weapons.go). Пули вылетают из позиции игрока; по владельцу они не попадают
+// (см. firstHit).
 //
 // Разброс берётся от heat до выстрела: первый выстрел с холодного ствола точен.
 // В тиках без выстрела (огонь отпущен, кулдаун или нет патронов) heat остывает.
@@ -827,34 +848,31 @@ func (w *World) fire(dt float64, ids []PlayerID) {
 		if p.dead() {
 			continue
 		}
-		p.cooldown = math.Max(0, p.cooldown-dt)
+		p.cooldown = max(0, p.cooldown-dt)
 		if !p.Fire || p.cooldown > timeEps || !w.hasAmmo(p) {
 			p.Heat = max(p.Heat-w.cfg.HeatDecay*dt, 0)
 			continue
 		}
-		angle := p.Angle + w.spread(p.Heat)
-		p.Heat = min(p.Heat+w.cfg.HeatPerShot, 1)
-		dir := Vec2{X: math.Cos(angle), Y: math.Sin(angle)}
-		w.nextBullet++
-		w.bullets = append(w.bullets, Bullet{
-			ID:    w.nextBullet,
-			Owner: id,
-			Pos:   p.Pos,
-			Vel:   Vec2{X: dir.X * w.cfg.BulletSpeed, Y: dir.Y * w.cfg.BulletSpeed},
-			ttl:   w.cfg.BulletLifetime,
-		})
-		w.emit(Event{Type: EventShot, Player: id, Pos: p.Pos})
-		p.cooldown = w.cfg.FireCooldown
-		if w.cfg.MaxAmmo > 0 {
-			p.Ammo--
+		wp := w.weapon(p)
+		angle := p.Angle + w.spread(p.Heat) // один бросок на выстрел: весь веер сдвигается вместе
+		p.Heat = min(p.Heat+wp.HeatPerShot, 1)
+		n := wp.pellets()
+		for k := range n {
+			a := angle + wp.pelletOffset(k, n)
+			w.nextBullet++
+			w.bullets = append(w.bullets, Bullet{
+				ID:     w.nextBullet,
+				Owner:  id,
+				Pos:    p.Pos,
+				Vel:    Vec2{X: math.Cos(a) * wp.BulletSpeed, Y: math.Sin(a) * wp.BulletSpeed},
+				Damage: wp.Damage,
+				ttl:    wp.BulletTTL,
+			})
 		}
+		w.emit(Event{Type: EventShot, Player: id, Pos: p.Pos, Weapon: p.Weapon})
+		p.cooldown = wp.cooldown()
+		w.useAmmo(p) // после события: shot несёт оружие, из которого стреляли
 	}
-}
-
-// hasAmmo — может ли игрок выстрелить по патронам. При MaxAmmo ≤ 0 патроны
-// отключены и стрельба не ограничена.
-func (w *World) hasAmmo(p *Player) bool {
-	return w.cfg.MaxAmmo <= 0 || p.Ammo > 0
 }
 
 // spread — случайное отклонение угла в ±heat×MaxSpread из генератора мира.
@@ -880,16 +898,18 @@ func (w *World) Snapshot() Snapshot {
 			respawnIn = w.zg.nextWave // воскреснет с началом следующей волны
 		}
 		ps = append(ps, PlayerState{
-			ID:      p.ID,
-			Pos:     p.Pos,
-			Angle:   p.Angle,
-			Heat:    p.Heat,
-			HP:      p.HP,
-			Score:   p.Score,
-			Ammo:    p.Ammo,
-			Boosted: p.speedLeft > timeEps,
-			DashCd:  p.dashCooldownLeft(),
-			LastSeq: p.LastSeq,
+			ID:         p.ID,
+			Pos:        p.Pos,
+			Angle:      p.Angle,
+			Heat:       p.Heat,
+			HP:         p.HP,
+			Score:      p.Score,
+			Ammo:       p.Ammo,
+			Weapon:     p.Weapon,
+			WeaponAmmo: p.WeaponAmmo,
+			Boosted:    p.speedLeft > timeEps,
+			DashCd:     p.dashCooldownLeft(),
+			LastSeq:    p.LastSeq,
 
 			Dead:      p.dead(),
 			RespawnIn: respawnIn,

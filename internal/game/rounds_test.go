@@ -22,7 +22,7 @@ func killOnce(t *testing.T, w *World) {
 	// ниже неё угловая стена ↙ (y 484), выше — пустое поле.
 	place(w, 1, 100, 420)
 	place(w, 2, 220, 420)
-	w.players[2].HP = w.cfg.BulletDamage
+	w.players[2].HP = w.cfg.Weapons[WeaponPistol].Damage
 	seq, score := w.players[1].LastSeq, w.players[1].Score
 	w.Update(dt, map[PlayerID]Input{1: {Seq: seq + 1, Fire: true}})
 	w.Update(dt, map[PlayerID]Input{1: {Seq: seq + 2}})

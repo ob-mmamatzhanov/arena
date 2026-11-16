@@ -99,9 +99,9 @@ type zombieGame struct {
 	flowWait int // тиков до пересчёта flow field
 }
 
-// zombiesCap — начальная ёмкость среза зомби: волны до ~30 зомби не
+// zombiesCap — начальная ёмкость среза зомби: волны до 64 зомби (волна 32) не
 // аллоцируют в Update.
-const zombiesCap = 32
+const zombiesCap = 64
 
 func newZombieGame(cfg Config) zombieGame {
 	return zombieGame{zombies: make([]Zombie, 0, zombiesCap), flow: newFlowField(cfg)}
@@ -213,6 +213,7 @@ func (w *World) bitePlayer(p *Player) {
 		return
 	}
 	w.emit(Event{Type: EventKill, Target: p.ID})
+	p.resetWeapon()
 	p.HP = 0
 	p.waitWave = true
 	p.killer = 0
@@ -262,12 +263,13 @@ func (w *World) firstZombie(from, to Vec2) (int, Vec2, float64, bool) {
 	return best, bestP, bestT, best >= 0
 }
 
-// hitZombie — пуля стрелка shooter попала в зомби i в точке at. Ранение —
-// bulletHit (пуля погасла), убийство — zombieKill и +1 к счёту стрелка.
+// hitZombie — пуля стрелка shooter с уроном damage попала в зомби i в точке
+// at. Ранение — bulletHit (пуля погасла), убийство — zombieKill и +1 к счёту
+// стрелка.
 // Убитый остаётся в срезе с HP ≤ 0 до updateZombies этого же тика.
-func (w *World) hitZombie(i int, shooter PlayerID, at Vec2) {
+func (w *World) hitZombie(i int, shooter PlayerID, at Vec2, damage int) {
 	z := &w.zg.zombies[i]
-	z.HP -= w.cfg.BulletDamage
+	z.HP -= damage
 	if z.HP > 0 {
 		w.emit(Event{Type: EventBulletHit, Pos: at})
 		return
@@ -424,17 +426,44 @@ func unit(v Vec2) Vec2 {
 // и при шаге 5 в неё всегда попадает точка, а в щели 16 таких центров нет.
 // anchor — найденная точка, ближайшая к центру клетки: к ней и идёт зомби.
 //
-// Проходимость считается только при смене препятствий (dirty: начало волны,
-// поломка и восстановление ящиков); BFS — каждые FlowEvery тиков. Буферы
-// выделяются один раз.
+// Сетка строится по размерам карты (на 1600×1200 при клетке 20 — 80×60).
+// Проходимость считается только при смене препятствий: целиком при dirty
+// (начало волны, восстановление ящиков), а при поломке ящика — только в
+// клетках вокруг него (stale, см. invalidate). Вместе с ней пересчитывается
+// таблица соседей nbr, по которой BFS идёт без делений и проверок углов. BFS —
+// каждые FlowEvery тиков. Буферы выделяются один раз.
 type flowField struct {
 	cell       float64
 	cols, rows int
 	blocked    []bool
 	anchor     []Vec2
+	nbr        []int32 // по 8 на клетку: сосед в направлении flowNeighbors[k] или −1 (см. computeStep)
 	dist       []int32
 	queue      []int32
-	dirty      bool
+	dirty      bool     // проходимость всех клеток устарела
+	stale      cellRect // клетки, проходимость которых устарела; пусто — таких нет
+}
+
+// cellRect — прямоугольник клеток [x0, x1]×[y0, y1] включительно; x0 > x1 — пусто.
+type cellRect struct{ x0, y0, x1, y1 int }
+
+var noCells = cellRect{0, 0, -1, -1}
+
+func (r cellRect) empty() bool { return r.x0 > r.x1 || r.y0 > r.y1 }
+
+func (r cellRect) union(o cellRect) cellRect {
+	switch {
+	case r.empty():
+		return o
+	case o.empty():
+		return r
+	}
+	return cellRect{min(r.x0, o.x0), min(r.y0, o.y0), max(r.x1, o.x1), max(r.y1, o.y1)}
+}
+
+// grow расширяет прямоугольник на d клеток, не выходя за сетку.
+func (f *flowField) grow(r cellRect, d int) cellRect {
+	return cellRect{max(r.x0-d, 0), max(r.y0-d, 0), min(r.x1+d, f.cols-1), min(r.y1+d, f.rows-1)}
 }
 
 const flowSamples = 4
@@ -473,23 +502,41 @@ func newFlowField(cfg Config) flowField {
 	n := cols * rows
 	return flowField{
 		cell: cell, cols: cols, rows: rows,
-		blocked: make([]bool, n), anchor: make([]Vec2, n),
+		blocked: make([]bool, n), anchor: make([]Vec2, n), nbr: make([]int32, len(flowNeighbors)*n),
 		dist: make([]int32, n), queue: make([]int32, 0, n),
-		dirty: true,
+		dirty: true, stale: noCells,
 	}
 }
 
+// cellXY — координаты клетки, в которой лежит p (за краем — крайняя клетка).
+func (f *flowField) cellXY(p Vec2) (int, int) {
+	return min(max(int(p.X/f.cell), 0), f.cols-1), min(max(int(p.Y/f.cell), 0), f.rows-1)
+}
+
 func (f *flowField) cellOf(p Vec2) int {
-	cx := min(max(int(p.X/f.cell), 0), f.cols-1)
-	cy := min(max(int(p.Y/f.cell), 0), f.rows-1)
+	cx, cy := f.cellXY(p)
 	return cy*f.cols + cx
 }
 
 func (f *flowField) reachable(p Vec2) bool { return f.dist[f.cellOf(p)] >= 0 }
 
-// step — соседняя клетка c в направлении k или −1 (за краем, непроходима,
-// диагональ через угол препятствия).
-func (f *flowField) step(c, k int) int {
+// invalidate — препятствие o появилось или исчезло: устарела проходимость
+// клеток, точки которых ближе r (радиус зомби) к o. Вне режима зомби поля нет.
+func (f *flowField) invalidate(o Obstacle, r float64) {
+	if len(f.blocked) == 0 {
+		return
+	}
+	x0, y0 := f.cellXY(Vec2{X: o.X - r, Y: o.Y - r})
+	x1, y1 := f.cellXY(Vec2{X: o.X + o.W + r, Y: o.Y + o.H + r})
+	f.stale = f.stale.union(cellRect{x0, y0, x1, y1})
+}
+
+// step — соседняя клетка c в направлении k или −1 (по таблице nbr).
+func (f *flowField) step(c, k int) int { return int(f.nbr[c*len(flowNeighbors)+k]) }
+
+// computeStep — соседняя клетка c в направлении k или −1 (за краем,
+// непроходима, диагональ через угол препятствия). Заполняет таблицу nbr.
+func (f *flowField) computeStep(c, k int) int32 {
 	cx, cy := c%f.cols, c/f.cols
 	dx, dy := flowNeighbors[k][0], flowNeighbors[k][1]
 	nx, ny := cx+dx, cy+dy
@@ -503,7 +550,7 @@ func (f *flowField) step(c, k int) int {
 	if dx != 0 && dy != 0 && (f.blocked[cy*f.cols+nx] || f.blocked[ny*f.cols+cx]) {
 		return -1
 	}
-	return n
+	return int32(n)
 }
 
 // downhill — соседняя клетка с наименьшим dist, меньшим, чем у c (из
@@ -521,35 +568,52 @@ func (f *flowField) downhill(c int) int {
 	return best
 }
 
-// updatePassable пересчитывает проходимость и опорные точки клеток.
-func (w *World) updatePassable() {
+// updatePassable пересчитывает проходимость и опорные точки клеток rect, затем
+// таблицу соседей: она зависит от проходимости клеток на расстоянии 1, поэтому
+// пересчитывается в rect, расширенном на клетку.
+func (w *World) updatePassable(rect cellRect) {
 	f := &w.zg.flow
 	r := w.cfg.Zombie.Radius
 	lo, hi := w.boundsFor(r)
 	step := f.cell / flowSamples
-	for i := range f.blocked {
-		x0, y0 := float64(i%f.cols)*f.cell, float64(i/f.cols)*f.cell
-		f.blocked[i] = true
-		for _, s := range flowSampleOrder {
-			p := Vec2{X: x0 + (float64(s[0])+0.5)*step, Y: y0 + (float64(s[1])+0.5)*step}
-			if p.X < lo.X || p.X > hi.X || p.Y < lo.Y || p.Y > hi.Y || !w.circleFree(p, r) {
-				continue
+	for cy := rect.y0; cy <= rect.y1; cy++ {
+		for cx := rect.x0; cx <= rect.x1; cx++ {
+			i := cy*f.cols + cx
+			x0, y0 := float64(cx)*f.cell, float64(cy)*f.cell
+			f.blocked[i] = true
+			for _, s := range flowSampleOrder {
+				p := Vec2{X: x0 + (float64(s[0])+0.5)*step, Y: y0 + (float64(s[1])+0.5)*step}
+				if p.X < lo.X || p.X > hi.X || p.Y < lo.Y || p.Y > hi.Y || !w.circleFree(p, r) {
+					continue
+				}
+				f.blocked[i], f.anchor[i] = false, p
+				break
 			}
-			f.blocked[i], f.anchor[i] = false, p
-			break
 		}
 	}
-	f.dirty = false
+	nr := f.grow(rect, 1)
+	for cy := nr.y0; cy <= nr.y1; cy++ {
+		for cx := nr.x0; cx <= nr.x1; cx++ {
+			c := cy*f.cols + cx
+			for k := range flowNeighbors {
+				f.nbr[c*len(flowNeighbors)+k] = f.computeStep(c, k)
+			}
+		}
+	}
 }
 
-// rebuildFlow пересчитывает flow field: при смене препятствий — проходимость,
-// затем BFS от клеток живых игроков. Без аллокаций.
+// rebuildFlow пересчитывает flow field: устаревшую проходимость (всю при
+// dirty, иначе — клетки stale), затем BFS от клеток живых игроков. Без аллокаций.
 func (w *World) rebuildFlow(ids []PlayerID) {
 	f := &w.zg.flow
 	w.zg.flowWait = w.cfg.Zombie.FlowEvery
-	if f.dirty {
-		w.updatePassable()
+	switch {
+	case f.dirty:
+		w.updatePassable(cellRect{0, 0, f.cols - 1, f.rows - 1})
+	case !f.stale.empty():
+		w.updatePassable(f.stale)
 	}
+	f.dirty, f.stale = false, noCells
 	for i := range f.dist {
 		f.dist[i] = -1
 	}
@@ -568,10 +632,11 @@ func (w *World) rebuildFlow(ids []PlayerID) {
 	}
 	for h := 0; h < len(q); h++ {
 		c := int(q[h])
-		for k := range flowNeighbors {
-			if n := f.step(c, k); n >= 0 && f.dist[n] < 0 {
-				f.dist[n] = f.dist[c] + 1
-				q = append(q, int32(n))
+		d := f.dist[c] + 1
+		for _, n := range f.nbr[c*len(flowNeighbors) : (c+1)*len(flowNeighbors)] {
+			if n >= 0 && f.dist[n] < 0 {
+				f.dist[n] = d
+				q = append(q, n)
 			}
 		}
 	}
